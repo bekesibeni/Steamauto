@@ -240,10 +240,16 @@ class BuffAutoAcceptOffer:
                                         logger.info("Accepting offer...")
                                         desc = self.format_item_info(trade)
                                         
-                                        # Use the pre-stored target client for this offer
-                                        target_client = trade.get('target_client')
+                                        # Get the target client for this offer using the user_steamid
+                                        user_steamid = trade.get('user_steamid', '')
+                                        if not user_steamid:
+                                            logger.error(f"No user_steamid found for offer {offer_id}")
+                                            continue
+                                            
+                                        # Get the correct client for this user_steamid
+                                        target_client = multi_account_manager.get_client_for_steamid(user_steamid)
                                         if not target_client:
-                                            logger.error(f"No target client found for offer {offer_id}")
+                                            logger.error(f"No Steam client found for user_steamid: {user_steamid}")
                                             continue
                                             
                                         
