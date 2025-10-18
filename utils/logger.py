@@ -11,11 +11,21 @@ import requests
 from requests.exceptions import ConnectionError, ReadTimeout
 
 import utils.static as static
-from steampy.exceptions import (ApiException, ConfirmationExpected,
-                                EmptyResponse, InvalidCredentials,
-                                InvalidResponse, SteamError)
-from utils.static import (BUILD_INFO, CONFIG_FILE_PATH, CURRENT_VERSION,
-                          LOGS_FOLDER, STEAM_ERROR_CODES)
+from steampy.exceptions import (
+    ApiException,
+    ConfirmationExpected,
+    EmptyResponse,
+    InvalidCredentials,
+    InvalidResponse,
+    SteamError,
+)
+from utils.static import (
+    BUILD_INFO,
+    CONFIG_FILE_PATH,
+    CURRENT_VERSION,
+    LOGS_FOLDER,
+    STEAM_ERROR_CODES,
+)
 
 sensitive_data = []
 sensitive_keys = ["ApiKey", "TradeLink", "JoinTime", "NickName", "access_token", "trade_url", "TransactionUrl", "RealName", "IdCard"]
@@ -37,21 +47,21 @@ class LogFilter(logging.Filter):
         def mask_value(value):
             return "*" * len(value)
 
-        # 处理 JSON 数据中的敏感信息
+        # Mask sensitive JSON fields
         for key in sensitive_keys:
             pattern = rf'"{key}"\s*:\s*("(.*?)"|(\d+)|(true|false|null))'
 
             def replace_match(match):
-                if match.group(2):  # 如果匹配到的是带引号的字符串
+                if match.group(2):
                     return f'"{key}": "{mask_value(match.group(2))}"'
-                elif match.group(3):  # 如果匹配到的是数字
+                elif match.group(3):
                     return f'"{key}": {mask_value(match.group(3))}'
-                elif match.group(4):  # 如果匹配到的是true, false或null
+                elif match.group(4):
                     return f'"{key}": {mask_value(match.group(4))}'
 
             record.msg = re.sub(pattern, replace_match, record.msg, flags=re.IGNORECASE)  # type: ignore
 
-        # 处理 URL 参数中的敏感信息
+        # Mask sensitive URL params
         for key in sensitive_keys:
             pattern = rf"({key}=)([^&\s]+)"
 
@@ -66,13 +76,13 @@ log_retention_days = None
 log_level = None
 try:
     with open(CONFIG_FILE_PATH, "r", encoding='utf-8') as f:
-            config = json5.loads(f.read())
-            if isinstance(config, dict):
-                log_level = str(config.get("log_level", "DEBUG")).upper()
-                log_retention_days = int(config.get("log_retention_days", 7))
-except Exception as e:
+        config = json5.loads(f.read())
+        if isinstance(config, dict):
+            log_level = str(config.get("log_level", "DEBUG")).upper()
+            log_retention_days = int(config.get("log_retention_days", 7))
+except Exception:
     pass
-    
+
 if log_retention_days:
     for log_file in os.listdir(LOGS_FOLDER):
         if log_file.endswith(".log"):
@@ -95,11 +105,11 @@ logger.addHandler(s_handler)
 f_handler = logging.FileHandler(os.path.join(LOGS_FOLDER, datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + ".log"), encoding="utf-8")
 if log_level and log_level.isdigit():
     f_handler.setLevel(int(log_level))
-elif log_level=="INFO":
+elif log_level == "INFO":
     f_handler.setLevel(logging.INFO)
-elif log_level=="WARNING":
+elif log_level == "WARNING":
     f_handler.setLevel(logging.WARNING)
-elif log_level=="ERROR":
+elif log_level == "ERROR":
     f_handler.setLevel(logging.ERROR)
 else:
     f_handler.setLevel(logging.DEBUG)
@@ -112,61 +122,59 @@ logger.debug(f"Steamauto {CURRENT_VERSION} started")
 logger.debug(f"Running on {platform.system()} {platform.release()}({platform.version()})")
 logger.debug(f"Python version: {os.sys.version}")  # type: ignore
 logger.debug(f"Build info: {BUILD_INFO}")
-logger.debug(f"Attributes check: _MEIPASS: {hasattr(sys, '_MEIPASS')}, frozen: {hasattr(sys, 'frozen')}")
-logger.debug(f"日志已经经过脱敏处理，请放心转发至公共平台！")
+logger.debug("Logs are sanitized. Safe to share publicly.")
 
 def handle_caught_exception(e: Exception, prefix: str = "", known: bool = False):
     plogger = logger
     if prefix and not prefix.endswith(" "):
         plogger = PluginLogger(prefix)
     if (not static.is_latest_version) and not known:
-        plogger.warning("当前Steamauto版本可能不是最新版本！请在更新到新版本后再次尝试！")
+        plogger.warning("Your Steamauto version may be outdated. Update to the latest version and try again.")
     logger.debug(e, exc_info=True)
 
     if isinstance(e, KeyboardInterrupt):
-        plogger.info("检测到键盘中断,程序即将退出...")
+        plogger.info("KeyboardInterrupt detected. Exiting...")
         exit(0)
     elif isinstance(e, SystemExit):
-        plogger.info("检测到系统退出请求,程序即将退出...")
+        plogger.info("System exit requested. Exiting...")
         exit(0)
     elif isinstance(e, requests.exceptions.SSLError):
-        plogger.error("梯子问题, 请更换梯子")
+        plogger.error("Proxy/VPN TLS issue. Change your proxy/VPN.")
     elif isinstance(e, EmptyResponse):
-        plogger.error("Steam返回空响应, 可能是IP受到Steam风控, 请更换IP或稍后再试")
+        plogger.error("Steam returned an empty response. Your IP may be limited. Change IP or try later.")
     elif isinstance(e, requests.exceptions.ProxyError):
-        plogger.error("代理异常。建议关闭代理。如果你连接Steam有困难，可单独打开配置文件内的Steam代理功能。")
+        plogger.error("Proxy error. Disable the proxy. If Steam is hard to reach, enable only the Steam proxy in config.")
     elif isinstance(e, (ConnectionError, ConnectionResetError, ConnectionAbortedError, ConnectionRefusedError, ReadTimeout, InvalidResponse)):
-        plogger.error("网络异常, 请检查网络连接")
-        plogger.error("这个错误可能是由于代理或VPN引起的, 本软件可不使用代理或任何VPN")
-        plogger.error("如果你正在使用代理或VPN, 请尝试关闭后重启软件")
-        plogger.error("如果你没有使用代理或VPN, 请检查网络连接")
+        plogger.error("Network error. Check your connection.")
+        plogger.error("This may be caused by a proxy or VPN. The app can run without any proxy or VPN.")
+        plogger.error("If you use a proxy or VPN, disable it and restart the app.")
+        plogger.error("If you do not use a proxy or VPN, check your network.")
     elif isinstance(e, InvalidCredentials):
-        plogger.error("mafile有问题, 请检查mafile是否正确(尤其是identity_secret)")
+        plogger.error("Invalid mafile. Verify it, especially identity_secret.")
         plogger.error(str(e))
     elif isinstance(e, ConfirmationExpected):
-        plogger.error("Steam Session已经过期, 请删除session文件夹并重启Steamauto")
+        plogger.error("Steam session expired. Delete the session folder and restart Steamauto.")
     elif isinstance(e, SystemError):
-        plogger.error("无法连接至Steam，请检查Steam账户状态、网络连接、或重启Steamauto")
+        plogger.error("Cannot connect to Steam. Check account status, network, or restart Steamauto.")
     elif isinstance(e, SteamError):
-        plogger.error("Steam 异常, 异常id:" + str(e.error_code) + ", 异常信息:" + STEAM_ERROR_CODES.get(e.error_code, "未知Steam错误"))
+        plogger.error("Steam error, id:" + str(e.error_code) + ", message:" + STEAM_ERROR_CODES.get(e.error_code, "Unknown Steam error"))
     elif isinstance(e, ApiException):
         if 'Invalid trade offer state' in str(e):
             if 'Canceled' in str(e):
-                plogger.error("交易已取消，无法接受报价")
+                plogger.error("Trade canceled. Cannot accept offer.")
             elif 'Accepted' in str(e):
-                plogger.error("交易已接受，无法重复操作")
+                plogger.error("Trade already accepted. Cannot repeat.")
             else:
-                plogger.error("交易状态异常，无法接受报价，异常信息：" + str(e))
+                plogger.error("Invalid trade state. Cannot accept offer. Details: " + str(e))
         else:
-            plogger.error("Steam API 异常, 异常信息: " + str(e))
+            plogger.error("Steam API error. Details: " + str(e))
     else:
         if not known:
             plogger.error(
-                f"当前Steamauto版本：{CURRENT_VERSION}\nPython版本：{os.sys.version}\n系统版本：{platform.system()} {platform.release()}({platform.version()})\n编译信息：{BUILD_INFO}\n" # type: ignore
+                f"Steamauto version: {CURRENT_VERSION}\nPython: {os.sys.version}\nSystem: {platform.system()} {platform.release()}({platform.version()})\nBuild: {BUILD_INFO}\n"  # type: ignore
             )
-            plogger.error("发生未知异常, 异常信息:" + str(e) + ", 异常类型:" + str(type(e)) + ", 建议反馈至开发者！截图此页面对开发者没有任何帮助！请同时向开发者提供日志文件！")
-        
-        if BUILD_INFO == '正在使用源码运行':
+            plogger.error("Unknown exception. Message: " + str(e) + ", Type: " + str(type(e)) + ". Please report to the developer. A screenshot is not helpful. Include the log file.")
+        if BUILD_INFO == 'Running from source':
             plogger.error(e, exc_info=True)
 
 
@@ -191,6 +199,6 @@ class PluginLogger:
 
     def critical(self, msg, *args, **kwargs):
         logger.critical(f"{self.pluginName} {msg}", *args, **kwargs)
-    
+
     def log(self, level, msg, *args, **kwargs):
         logger.log(level, f"{self.pluginName} {msg}", *args, **kwargs)

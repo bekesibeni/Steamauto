@@ -39,7 +39,7 @@ class jobHandler:
             del jobs[jobs.index(job)]
 
 
-# 用于解决读取文件时的编码问题
+# Fix file-encoding detection when reading files
 def get_encoding(file_path):
     if not os.path.exists(file_path):
         return "utf-8"
@@ -51,8 +51,13 @@ def get_encoding(file_path):
 
 def pause():
     if not static.no_pause:
-        logger.info("点击回车键继续...")
-        input()
+        logger.info("Press Enter to continue...")
+        try:
+            input()
+        except EOFError:
+            # Non-interactive environments (e.g., automated tests)
+            logger.info("Non-interactive environment. Skipping user input")
+            pass
 
 
 def calculate_sha256(file_path: str) -> str:

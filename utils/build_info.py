@@ -1,1 +1,1 @@
-info = "正在使用源码运行"
+info = "Running from source"

@@ -8,8 +8,8 @@
 #                                 | |
 #                                 |_|
 # Buff-Api By jiajiaxd(https://github.com/jiajiaxd)
-# 请在遵守GPL-3.0协议的前提下使用本API。
-# 仅供学习交流使用，所造成的一切后果将由使用者自行承担！
+# Please use this API in compliance with the GPL-3.0 license.
+# For learning and communication purposes only. Users are responsible for all consequences!
 
 import copy
 import json
@@ -53,14 +53,14 @@ def get_random_header() -> dict:
 
 class BuffAccount:
     """
-    支持自定义User-Agent
-    参数为Buff的cookie
-    参考格式：
+    Supports custom User-Agent
+    Parameter is Buff cookie
+    Reference format:
     session=*******
-    若报错，大概率是因为你被BUFF的反爬虫机制检测到了，请多次尝试！
+    If error occurs, it's likely because you've been detected by BUFF's anti-crawler mechanism, please try multiple times!
 
-    附：
-    Buff的每个商品的每种磨损（品质）均有一个独立的goods_id,每一件商品都有一个独立的id
+    Note:
+    Each item's each wear (quality) in Buff has an independent goods_id, and each item has an independent id
     """
     
     BASE_URL = "https://buff.163.com"
@@ -92,11 +92,11 @@ class BuffAccount:
                 self.username = user_info["nickname"]
                 return self.username
         except AttributeError:
-            raise ValueError("Buff登录失败！请稍后再试或检查cookie填写是否正确.")
+            raise ValueError("Buff login failed! Please try again later or check if the cookie is filled correctly.")
         return ""
 
     def get_user_info(self) -> Dict:
-        """获取用户信息，包含SteamID等数据"""
+        """Get user information, including SteamID and other data"""
         response = self.get(f"{self.BASE_URL}/account/api/user/info")
         if response.status_code == 200:
             data = response.json()
@@ -105,7 +105,7 @@ class BuffAccount:
         return {}
 
     def set_force_buyer_send_offer(self) -> bool:
-        """设置只允许买家发起交易报价"""
+        """Set to only allow buyers to initiate trade offers"""
         headers = self.CSRF_Fucker()
         headers["Referer"] = f"{self.BASE_URL}/user-center/profile"
         data = {"force_buyer_send_offer": "true"}
@@ -121,7 +121,7 @@ class BuffAccount:
         return False
 
     def get_sell_order_to_deliver(self, game: str, appid: Union[str, int]) -> Dict:
-        """获取等待发货的订单"""
+        """Get orders waiting for delivery"""
         params = {
             "game": game,
             "appid": str(appid)
@@ -134,7 +134,7 @@ class BuffAccount:
         return {}
 
     def get_sell_order_history(self, appid: Union[str, int]) -> List:
-        """获取销售历史记录"""
+        """Get sales history records"""
         params = {
             "appid": str(appid),
             "mode": "1"
@@ -148,7 +148,7 @@ class BuffAccount:
 
     def get_user_brief_assest(self) -> dict:
         """
-        包含用户余额等信息
+        Contains user balance and other information
         :return: dict
         """
         return json.loads(self.get(f"{self.BASE_URL}/api/asset/get_brief_asset").text).get("data")
@@ -167,7 +167,7 @@ class BuffAccount:
 
     def get_sell_order(self, goods_id, page_num=1, game_name="csgo", sort_by="default", proxy=None, min_paintseed=None, max_paintseed=None) -> dict:
         """
-        获取指定饰品的在售商品
+        Get on-sale items for specified skins
         :return: dict
         """
         params = {
@@ -206,11 +206,11 @@ class BuffAccount:
 
     def get_available_payment_methods(self, sell_order_id, goods_id, price, game_name="csgo") -> dict:
         """
-        :param game_name:默认为csgo
+        :param game_name: Default is csgo
         :param sell_order_id:
         :param goods_id:
-        :param price:饰品价格
-        :return: dict key只会包含buff-alipay和buff-bankcard，若不存在key，则代表此支付方式不可用。value值为当前余额
+        :param price: Skin price
+        :return: dict key will only contain buff-alipay and buff-bankcard, if key doesn't exist, it means this payment method is unavailable. value is current balance
         """
 
         methods = (
@@ -245,18 +245,18 @@ class BuffAccount:
         game_name="csgo",
     ):
         """
-        由于部分卖家禁用了由卖家发起报价，因此不推荐使用此API
+        Since some sellers have disabled seller-initiated offers, this API is not recommended
         :param sell_order_id:
         :param goods_id:
         :param price:
-        :param pay_method:仅支持buff-alipay或buff-bankcard.
-        :param ask_seller_send_offer: 是否要求卖家发送报价
-        若为False则为由买家发送报价
-        警告：本API并不会自动发起报价，报价需要用户在手机版BUFF上发起！！！
-        若卖家禁用了由卖家发起报价，则会自动更改为由买家发送报价！！！
-        建议与github.com/jiajiaxd/Buff-Bot配合使用，效果更佳！
-        :param game_name: 默认为csgo
-        :return:若购买成功则返回'购买成功'，购买失败则返回错误信息
+        :param pay_method: Only supports buff-alipay or buff-bankcard.
+        :param ask_seller_send_offer: Whether to ask seller to send offer
+        If False, then buyer sends offer
+        Warning: This API does not automatically initiate offers, offers need to be initiated by user on mobile BUFF!!!
+        If seller has disabled seller-initiated offers, it will automatically change to buyer sending offer!!!
+        Recommend using with github.com/jiajiaxd/Buff-Bot for better results!
+        :param game_name: Default is csgo
+        :return: If purchase successful returns 'Purchase successful', if failed returns error message
         """
         load = {
             "game": game_name,
@@ -279,7 +279,7 @@ class BuffAccount:
         headers["origin"] = self.BASE_URL
         headers["referer"] = f"{self.BASE_URL}/goods/{str(goods_id)}?from=market"
         headers["x-requested-with"] = "XMLHttpRequest"
-        # 获取最新csrf_token
+        # Get latest csrf_token
         self.get(f"{self.BASE_URL}/api/message/notification")
         self.session.cookies.get("csrf_token")
         headers["x-csrftoken"] = str(self.session.cookies.get("csrf_token"))
@@ -290,7 +290,7 @@ class BuffAccount:
             params={"bill_orders": bill_id},
         )
         headers["x-csrftoken"] = str(self.session.cookies.get("csrf_token"))
-        time.sleep(0.5)  # 由于Buff服务器处理支付需要一定的时间，所以一定要在这里加上sleep，否则无法发送下一步请求
+        time.sleep(0.5)  # Since Buff server needs time to process payment, sleep must be added here, otherwise next request cannot be sent
         if ask_seller_send_offer:
             load = {"bill_orders": [bill_id], "game": game_name}
             response = self.post(
@@ -307,13 +307,13 @@ class BuffAccount:
             )
         response = json.loads(response.text)
         if response.get("msg") is None and response.get("code") == "OK":
-            return "购买成功"
+            return "Purchase successful"
         else:
             return response
 
     def get_notification(self, headers=None) -> dict:
         """
-        获取notification
+        Get notification
         :return: dict
         """
         if headers:
@@ -337,7 +337,7 @@ class BuffAccount:
 
     def on_sale(self, assets: list[models.BuffOnSaleAsset]):
         """
-        仅支持CSGO 返回上架成功商品的id
+        Only supports CSGO, returns successfully listed item ids
         """
         response = self.post(
             f"{self.BASE_URL}/api/market/sell_order/create/manual_plus",
@@ -359,7 +359,7 @@ class BuffAccount:
 
     def cancel_sale(self, sell_orders: list, exclude_sell_orders: list = []):
         """
-        返回下架成功数量
+        Returns number of successfully delisted items
         """
         success = 0
         problem_sell_orders = {}
@@ -397,7 +397,7 @@ class BuffAccount:
 
     def change_price(self, sell_orders: list):
         """
-        problem的key是订单ID
+        problem's key is order ID
         """
         success = 0
         problems = {}

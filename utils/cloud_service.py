@@ -77,16 +77,16 @@ def compare_version(ver1, ver2):
 
 
 def get_uu_uk_from_cloud():
-    logger.debug('正在尝试从云服务获取UK...')
+    logger.debug('Attempting to fetch UK from cloud...')
     for i in range(3):
         try:
             response = session.get('https://steamauto.jiajiaxd.com/tools/getUUuk', timeout=5)
             response.raise_for_status()
-            logger.debug('服务器的响应: %s', response.text)
+            logger.debug('Server response: %s', response.text)
             data = response.json()
             return data['uk']
         except Exception as e:
-            logger.warning('云服务异常，无法获取UK，可能会导致悠悠某些功能无法正常使用')
+            logger.warning('Cloud service error. Unable to get UK. Some features may not work properly')
             handle_caught_exception(e, known=True)
     return ''
 
@@ -112,22 +112,21 @@ def autoUpdate(downloadUrl, sha256=''):
         with session.get(downloadUrl, stream=True, timeout=30) as response:
             response.raise_for_status()
 
-            # 获取文件名
+            # Determine filename
             content_disposition = response.headers.get('Content-Disposition')
             if content_disposition and 'filename=' in content_disposition:
                 filename = content_disposition.split('filename=')[1].strip('\"')
             else:
-                # 如果没有 Content-Disposition 头部，从 URL 中提取文件名
+                # Fallback to URL basename
                 filename = downloadUrl.split('/')[-1]
                 if not filename.endswith('.exe'):
-                    filename += '.exe'  # 确保文件是可执行的
+                    filename += '.exe'  # ensure executable on Windows
 
             total_size = int(response.headers.get('Content-Length', 0))
-            downloaded_size = 0
 
-            # 下载新版本的可执行文件
+            # Download new executable
             with open(filename, 'wb') as file, tqdm.tqdm(
-                desc=f'下载 {filename}',
+                desc=f'Downloading {filename}',
                 total=total_size,
                 unit='B',
                 unit_scale=True,
@@ -139,21 +138,20 @@ def autoUpdate(downloadUrl, sha256=''):
                     if not data:
                         break
                     file.write(data)
-                    downloaded_size += len(data)
                     bar.update(len(data))
-            logger.info('下载完成: %s', filename)
+            logger.info('Download complete: %s', filename)
     except Exception as e:
-        logger.error('下载失败')
+        logger.error('Download failed')
         return False
 
     if sha256:
-        logger.info('正在校验文件...')
+        logger.info('Verifying file...')
         if calculate_sha256(filename) != sha256:
-            logger.error('文件校验失败，将不会更新')
+            logger.error('Checksum failed. Update aborted')
             return False
-        logger.info('文件校验通过')
+        logger.info('Checksum OK')
 
-    # 创建update.txt，写入旧版本的路径，以便更新后删除旧版本
+    # Create update.txt with old executable path so the updater can delete it
     with open('update.txt', 'w') as f:
         f.write(sys.executable)
     os.startfile(filename)  # type: ignore
@@ -166,106 +164,29 @@ def autoUpdate(downloadUrl, sha256=''):
 
 
 def getAds():
-    try:
-        response = session.get(
-            'https://steamauto.jiajiaxd.com/ads/get/',
-        )
-        response.raise_for_status()
-        ads = response.json()
-        if len(ads) > 0:
-            print('')
-        for ad in ads:
-            if ad.get('stop', 0):
-                print(f'{parseBroadcastMessage(ad["message"])}\n(滞留 {ad["stop"]} 秒)\n')
-                if not hasattr(sys, "_MEIPASS"):
-                    print('源码模式运行, 不进行暂停')
-                else:
-                    time.sleep(ad['stop'])
-            else:
-                print(f'{parseBroadcastMessage(ad["message"])}\n')
-
-    except Exception as e:
-        logger.warning('云服务无法连接，建议检查网络连接')
-        handle_caught_exception(e, known=True)
-        return False
+    # Advertisements disabled - no ads will be displayed
+    return True
 
 
 def checkVersion():
-    logger.info('正在检测当前版本是否为最新...')
-    try:
-        response = session.get(
-            'https://steamauto.jiajiaxd.com/versions/',
-            params={'clientVersion': static.CURRENT_VERSION, 'platform': get_platform_info()},
-            timeout=5,
-        )
-        if response.status_code != 200:
-            logger.error('由于服务端内部错误，无法检测版本')
-            return False
-        response = response.json()
-
-        if not response['latest']:
-            logger.warning(f'当前版本不是最新版本 最新版本为{response["latestVersion"]}')
-            logger.warning('更新日志：' + response['changelog'].replace('\\n', '\n'))
-        else:
-            static.is_latest_version = True
-            logger.info('当前版本为最新版本')
-
-        if response['broadcast']:
-            print('=' * 50 + '\n')
-            print('Steamauto 官方公告：')
-            print(parseBroadcastMessage(response['broadcast']['message']))
-            print('\n' + '=' * 50)
-
-        if response['latest']:
-            return True
-        static.is_latest_version = False
-        if response['significance'] == 'minor':
-            logger.info('最新版本为小版本更新，可自由选择是否更新')
-        elif response['significance'] == 'normal':
-            logger.warning('最新版本为普通版本更新，建议更新')
-        elif response['significance'] == 'important':
-            logger.warning('最新版本为重要版本更新，强烈建议更新')
-        elif response['significance'] == 'critical':
-            logger.error('最新版本为关键版本更新，可能包含重要修复，在更新前程序不会继续运行')
-        if 'windows' in get_platform_info() and static.BUILD_INFO != '正在使用源码运行' and hasattr(sys, '_MEIPASS'):
-            logger.info('当前为独立打包程序且运行在Windows平台，将自动下载更新')
-            if response.get('downloadUrl') and response.get('sha256'):
-                logger.info('下载地址：' + response['downloadUrl'])
-                autoUpdate(response['downloadUrl'], sha256=response['sha256'])
-            elif response.get('message'):
-                logger.warning(response['message'])
-            else:
-                logger.error('服务器未返回下载地址或sha256值，无法更新')
-        elif response['significance'] == 'critical':
-            logger.critical('由于版本过低，程序将退出')
-            pause()
-            pid = os.getpid()
-            os.kill(pid, signal.SIGTERM)
-        else:
-            send_notification(
-                title='Steamauto有新版本可用',
-                message=f'当前版本：{static.CURRENT_VERSION}\n最新版本：{response["latestVersion"]}\n' f'更新日志：{response["changelog"]}',
-            )
-
-    except Exception as e:
-        handle_caught_exception(e, known=True)
-        logger.warning('云服务无法连接，无法检测更新，建议检查网络连接')
-        return False
+    # Auto-update functionality completely disabled
+    static.is_latest_version = True
+    logger.info('Auto-update disabled - running current version')
+    return True
 
 
 def adsThread():
-    while True:
-        time.sleep(600)
-        getAds()
+    # Advertisements thread disabled
+    pass
 
 
 def versionThread():
-    while True:
-        time.sleep(43200)
-        checkVersion()
+    # Auto-update thread disabled
+    pass
 
 
-ad = threading.Thread(target=adsThread)
-update = threading.Thread(target=versionThread)
-ad.start()
-update.start()
+# Auto-update and advertisement threads completely disabled
+# ad = threading.Thread(target=adsThread)
+# update = threading.Thread(target=versionThread)
+# ad.start()
+# update.start()

@@ -15,12 +15,22 @@ hidden_imports = [
         'PyC5Game',
         'PyECOsteam',
         'uuyoupinapi',
-        'BuffApi'
+        'BuffApi',
+        'steampy',
+        'protobufs',
+        'utils.models',
+        'utils.static',
+        'utils.logger',
+        'utils.notifier',
+        'utils.steam_client',
+        'utils.tools',
+        'utils.code_updater',
+        'utils.old_version_patches',
+        'utils.build_info',
+        'utils.cloud_service',
+        'utils.static'
     ]
-if os.path.exists('requirements.txt'):
-    with open('requirements.txt') as f:
-        for line in f:
-            hidden_imports.append(line.strip())
+# Don't add requirements.txt lines as hidden imports as they are package names, not module names
 
 datas = [('plugins', 'plugins')]
 binaries= []

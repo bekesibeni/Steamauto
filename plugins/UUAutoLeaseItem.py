@@ -29,7 +29,7 @@ class UUAutoLeaseItem:
 
     def init(self) -> bool:
         if not get_valid_token_for_uu():
-            self.logger.error("悠悠有品登录失败！即将关闭程序！")
+            self.logger.error("UUYoupin login failed. Exiting.")
             exit_code.set(1)
             return True
         return False
@@ -43,8 +43,8 @@ class UUAutoLeaseItem:
                 long_lease_unit_price = self.lease_price_cache[template_id]["long_lease_unit_price"]
                 lease_deposit = self.lease_price_cache[template_id]["lease_deposit"]
                 self.logger.info(
-                    f"物品 {commodity_name} 使用缓存价格设置，"
-                    f"短租价格：{lease_unit_price:.2f}，长租价格：{long_lease_unit_price:.2f}，押金：{lease_deposit:.2f}"
+                    f"Item {commodity_name} uses cached pricing. "
+                    f"Short-term: {lease_unit_price:.2f}, Long-term: {long_lease_unit_price:.2f}, Deposit: {lease_deposit:.2f}"
                 )
                 return {
                     "LeaseUnitPrice": lease_unit_price,
@@ -79,7 +79,7 @@ class UUAutoLeaseItem:
 
             lease_deposit = max(float(np.mean(lease_deposit_list)) * 0.98, float(min(lease_deposit_list)))
 
-            self.logger.info(f"短租参考价格：{lease_unit_price_list}，长租参考价格：{long_lease_unit_price_list}")
+            self.logger.info(f"Short-term ref prices: {lease_unit_price_list}. Long-term ref prices: {long_lease_unit_price_list}")
         else:
             lease_unit_price = long_lease_unit_price = lease_deposit = 0
             commodity_name = ""
@@ -94,12 +94,12 @@ class UUAutoLeaseItem:
             long_lease_unit_price = max(long_lease_unit_price, lease_unit_price * 0.98)
 
             self.logger.info(
-                f"物品 {commodity_name}，启用比例定价，市场价 {min_price}，租金比例 {ratio}"
+                f"Item {commodity_name}. Ratio pricing enabled. Market price {min_price}. Ratio {ratio}"
             )
 
         self.logger.info(
-            f"物品 {commodity_name}，"
-            f"短租价格：{lease_unit_price:.2f}，长租价格：{long_lease_unit_price:.2f}，押金：{lease_deposit:.2f}"
+            f"Item {commodity_name}. "
+            f"Short-term: {lease_unit_price:.2f}, Long-term: {long_lease_unit_price:.2f}, Deposit: {lease_deposit:.2f}"
         )
         if lease_unit_price != 0:
             self.lease_price_cache[template_id] = {
@@ -117,13 +117,13 @@ class UUAutoLeaseItem:
         }
 
     def auto_lease(self):
-        self.logger.info("悠悠有品出租自动上架插件已启动")
+        self.logger.info("UUYoupin auto lease listing started")
         self.operate_sleep()
         if self.uuyoupin is not None:
             try:
                 lease_item_list = []
                 self.uuyoupin.send_device_info()
-                self.logger.info("正在获取悠悠有品库存...")
+                self.logger.info("Fetching UUYoupin inventory...")
 
                 self.inventory_list = self.uuyoupin.get_inventory(refresh=True)
 
@@ -162,42 +162,42 @@ class UUAutoLeaseItem:
 
                     lease_item_list.append(lease_item)
 
-                self.logger.info(f"共 {len(lease_item_list)} 件物品可以出租。")
+                self.logger.info(f"Total {len(lease_item_list)} items eligible for lease.")
 
                 self.operate_sleep()
                 if len(lease_item_list) > 0:
                     success_count = self.uuyoupin.put_items_on_lease_shelf(lease_item_list)
                     if success_count > 0:
-                        self.logger.info(f"成功上架 {success_count} 个物品。")
+                        self.logger.info(f"Successfully listed {success_count} item(s).")
                     else:
-                        self.logger.error("上架失败！请查看日志获得详细信息。")
+                        self.logger.error("Listing failed. Check logs for details.")
                     if len(lease_item_list) - success_count > 0:
-                        self.logger.error(f"有 {len(lease_item_list) - success_count} 个商品上架失败。")
+                        self.logger.error(f"{len(lease_item_list) - success_count} item(s) failed to list.")
 
             except TypeError as e:
                 handle_caught_exception(e, "UUAutoLeaseItem")
-                self.logger.error("悠悠有品出租出现错误。")
+                self.logger.error("UUYoupin leasing encountered an error.")
                 exit_code.set(1)
                 return 1
             except Exception as e:
                 self.logger.error(e, exc_info=True)
-                self.logger.info("出现未知错误, 稍后再试! ")
+                self.logger.info("Unknown error. Try later.")
                 try:
                     self.uuyoupin.get_user_nickname()
                 except KeyError as e:
                     handle_caught_exception(e, "UUAutoLeaseItem", known=True)
-                    send_notification('检测到悠悠有品登录已经失效,请重新登录', title='悠悠有品登录失效')
-                    self.logger.error("检测到悠悠有品登录已经失效,请重新登录。")
-                    self.logger.error("由于登录失败，插件将自动退出。")
+                    send_notification('UUYoupin login expired. Please log in again', title='UUYoupin login expired')
+                    self.logger.error("Detected UUYoupin login expiration. Please log in again.")
+                    self.logger.error("Login failed. Plugin will exit.")
                     exit_code.set(1)
                     return 1
 
     def auto_change_price(self):
-        self.logger.info("悠悠出租自动修改价格已启动")
+        self.logger.info("UUYoupin auto lease price updater started")
         self.operate_sleep(15)
         try:
             self.uuyoupin.send_device_info()
-            self.logger.info("正在获取悠悠有品出租已上架物品...")
+            self.logger.info("Fetching UUYoupin leased listings...")
             leased_item_list = self.leased_inventory_list
             for i, item in enumerate(leased_item_list):
 
@@ -219,35 +219,35 @@ class UUAutoLeaseItem:
                 if self.config["uu_auto_lease_item"]["lease_max_days"] <= 8:
                     item.LongLeaseUnitPrice = None
 
-            self.logger.info(f"{len(leased_item_list)} 件物品可以更新出租价格。")
+            self.logger.info(f"{len(leased_item_list)} items can be repriced for leasing.")
             self.operate_sleep()
             if len(leased_item_list) > 0:
                 success_count = self.uuyoupin.change_leased_price(leased_item_list, compensation_type=self.compensation_type)
-                self.logger.info(f"成功修改 {success_count} 件物品出租价格。")
+                self.logger.info(f"Successfully updated lease price for {success_count} item(s).")
                 if len(leased_item_list) - success_count > 0:
-                    self.logger.error(f"{len(leased_item_list) - success_count} 件物品出租价格修改失败。")
+                    self.logger.error(f"{len(leased_item_list) - success_count} item(s) failed to update lease price.")
             else:
-                self.logger.info(f"没有物品可以修改价格。")
+                self.logger.info("No items to update.")
 
         except TypeError as e:
             handle_caught_exception(e, "UUAutoLeaseItem-AutoChangePrice")
-            self.logger.error("悠悠有品出租出现错误")
+            self.logger.error("UUYoupin leasing encountered an error.")
             exit_code.set(1)
             return 1
         except Exception as e:
             self.logger.error(e, exc_info=True)
-            self.logger.info("出现未知错误, 稍后再试! ")
+            self.logger.info("Unknown error. Try later.")
             try:
                 self.uuyoupin.get_user_nickname()
             except KeyError as e:
                 handle_caught_exception(e, "UUAutoLeaseItem-AutoChangePrice", known=True)
-                self.logger.error("检测到悠悠有品登录已经失效,请重新登录")
-                self.logger.error("由于登录失败，插件将自动退出")
+                self.logger.error("Detected UUYoupin login expiration. Please log in again.")
+                self.logger.error("Login failed. Plugin will exit.")
                 exit_code.set(1)
                 return 1
 
     def auto_set_zero_cd(self):
-        self.logger.info("悠悠有品出租自动设置0cd已启动")
+        self.logger.info("UUYoupin auto set 0cd started")
         self.operate_sleep()
         if self.uuyoupin is not None:
             try:
@@ -258,15 +258,15 @@ class UUAutoLeaseItem:
                     if any(s != "" and is_subsequence(s, name) for s in self.config["uu_auto_lease_item"]["filter_name"]):
                         continue
                     enable_zero_cd_list.append(int(order["orderId"]))
-                self.logger.info(f"共 {len(enable_zero_cd_list)} 件物品可以设置为0cd。")
+                self.logger.info(f"Total {len(enable_zero_cd_list)} items can be set to 0cd.")
                 if len(enable_zero_cd_list) > 0:
                     self.uuyoupin.enable_zero_cd(enable_zero_cd_list)
             except Exception as e:
                 self.logger.error(e, exc_info=True)
-                self.logger.info("出现未知错误, 稍后再试! ")
+                self.logger.info("Unknown error. Try later.")
 
     def exec(self):
-        self.logger.info(f"以下物品不会出租：{self.config['uu_auto_lease_item']['filter_name']}")
+        self.logger.info(f"These items will NOT be leased: {self.config['uu_auto_lease_item']['filter_name']}")
         if "compensation_type" in self.config['uu_auto_lease_item']:
             self.compensation_type = self.config['uu_auto_lease_item']['compensation_type']
 
@@ -282,9 +282,9 @@ class UUAutoLeaseItem:
             zero_cd_run_time = self.config['uu_auto_lease_item']['zero_cd_run_time']
         else:
             zero_cd_run_time = "23:30"
-        self.logger.info(f"[自动出售] 等待到 {run_time} 开始执行。")
-        self.logger.info(f"[自动修改价格] 每隔 {interval} 分钟执行一次。")
-        self.logger.info(f"[设置0cd] 等待到 {zero_cd_run_time} 开始执行。")
+        self.logger.info(f"[Auto lease] Waiting until {run_time} to run.")
+        self.logger.info(f"[Auto reprice] Runs every {interval} minutes.")
+        self.logger.info(f"[Set 0cd] Waiting until {zero_cd_run_time} to run.")
 
         schedule.every().day.at(f"{run_time}").do(self.auto_lease)
         schedule.every(interval).minutes.do(self.auto_change_price)
@@ -302,21 +302,20 @@ class UUAutoLeaseItem:
 
     def pre_check_price(self):
         self.get_lease_price(44444, 1000)
-        self.logger.info("请检查押金获取是否有问题，如有请终止程序，否则开始运行该插件。")
+        self.logger.info("Verify deposit retrieval looks correct. If not, stop the program. Otherwise the plugin will proceed.")
         self.operate_sleep()
 
 
 if __name__ == "__main__":
-    # 调试代码
+    # Debug code
     with open("config/config.json5", "r", encoding="utf-8") as f:
         my_config = json5.load(f)
 
     uu_auto_lease = UUAutoLeaseItem(None, None, my_config)
     token = get_valid_token_for_uu()
     if not token:
-        uu_auto_lease.logger.error("由于登录失败，插件将自动退出")
+        uu_auto_lease.logger.error("Login failed. Plugin will exit.")
         exit_code.set(1)
     else:
         uu_auto_lease.uuyoupin = uuyoupinapi.UUAccount(token)
     uu_auto_lease.auto_change_price()
-

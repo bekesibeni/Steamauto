@@ -25,7 +25,7 @@ logger = PluginLogger('SteamClient')
 
 steam_client_mutex = threading.Lock()
 steam_client: Optional[SteamClient] = None
-token_refresh_thread = None  # 后台刷新线程引用
+token_refresh_thread = None  # background refresh thread reference
 
 try:
     with open(CONFIG_FILE_PATH, "r", encoding=get_encoding(CONFIG_FILE_PATH)) as f:
@@ -33,7 +33,7 @@ try:
 except Exception:
     pass
 
-# ================= JWT 解析与缓存辅助 ===================
+# ================= JWT parsing and cache helpers ===================
 
 def _parse_jwt_exp(jwt_token: Optional[str]) -> int:
     if not jwt_token:
@@ -49,7 +49,7 @@ def _parse_jwt_exp(jwt_token: Optional[str]) -> int:
         return payload_data.get('exp', 0)
     except Exception as e:
         handle_caught_exception(e, known=True)
-        logger.warning("解析JWT过期时间失败")
+        logger.warning("Failed to parse JWT expiration")
         return 0
 
 def _get_token_cache_path(username: str) -> str:
@@ -63,12 +63,12 @@ def _load_token_cache(username: str) -> dict:
                 return json.load(f)
         except Exception as e:
             handle_caught_exception(e, known=True)
-            logger.warning(f"读取token缓存文件失败: {cache_path}")
+            logger.warning(f"Failed to read token cache file: {cache_path}")
     return {}
 
 def _save_token_cache(username: str, auth_info: Dict[str, Any]):
     """
-    auth_info 期望结构:
+    Expected auth_info structure:
     {
         steamid: str,
         access_token: Optional[str],
@@ -91,7 +91,7 @@ def _save_token_cache(username: str, auth_info: Dict[str, Any]):
         "refresh_token_exp_timestamp": refresh_exp,
     }
 
-    # 友好可读时间
+    # Human-readable times
     try:
         if access_exp:
             cache_data["access_token_exp_readable"] = datetime.fromtimestamp(access_exp).strftime("%Y-%m-%d %H:%M:%S")
@@ -103,59 +103,59 @@ def _save_token_cache(username: str, auth_info: Dict[str, Any]):
     try:
         with open(cache_path, "w", encoding="utf-8") as f:
             json.dump(cache_data, f, indent=2, ensure_ascii=False)
-        logger.info("已保存token缓存: %s", cache_path)
+        logger.info("Saved token cache: %s", cache_path)
         if access_exp:
-            logger.info(" access_token 过期时间: %s", cache_data.get("access_token_exp_readable"))
+            logger.info(" access_token expires at: %s", cache_data.get("access_token_exp_readable"))
         if refresh_exp:
-            logger.info(" refresh_token 过期时间: %s", cache_data.get("refresh_token_exp_readable"))
+            logger.info(" refresh_token expires at: %s", cache_data.get("refresh_token_exp_readable"))
     except Exception as e:
         handle_caught_exception(e, known=True)
-        logger.error(f"保存token缓存失败: {cache_path}")
+        logger.error(f"Failed to save token cache: {cache_path}")
 
-# ================== 会话与代理设置 ======================
+# ================== Session and proxy settings ======================
 
 def _setup_client_session(client: SteamClient, config: dict):
     if config["steam_login_ignore_ssl_error"]:
-        logger.warning("警告: 已经关闭SSL验证, 请确保你的网络安全")
+        logger.warning("Warning: SSL verification disabled. Ensure your network is trusted.")
         client._session.verify = False
         requests.packages.urllib3.disable_warnings()  # type: ignore
     else:
         client._session.verify = True
 
     if config["steam_local_accelerate"]:
-        logger.info("已经启用Steamauto内置加速")
+        logger.info("Built-in accelerator enabled")
         client._session.auth = accelerator()
 
     if config.get("use_proxies", False):
         client._session.proxies = config["proxies"]
-        logger.info("已经启用Steam代理")
+        logger.info("Steam proxy enabled")
 
 def _check_proxy_availability(config: dict) -> bool:
     if not config.get("use_proxies", False):
         return True
     if not isinstance(config["proxies"], dict):
-        logger.error("proxies格式错误，请检查配置文件")
+        logger.error("Invalid proxies format. Check your config.")
         return False
-    logger.info("正在检查代理服务器可用性...")
+    logger.info("Checking proxy availability...")
     try:
         requests.get("https://steamcommunity.com", proxies=config["proxies"], timeout=10)
-        logger.info("代理服务器可用")
+        logger.info("Proxy reachable")
         return True
     except Exception as e:
         handle_caught_exception(e, known=True)
-        logger.error("代理服务器不可用，请检查配置文件，或者将use_proxies配置项设置为false")
+        logger.error("Proxy unreachable. Check config or set use_proxies=false")
         return False
 
-# ================== 后台刷新线程 ========================
+# ================== Background refresh thread ========================
 
 class TokenRefreshThread(threading.Thread):
     """
-    后台维护 access_token / refresh_token
-    策略:
-      - 每次循环检查距离 access_token 过期时间
-      - 距离过期 < 3600 秒则尝试刷新 (loginByRefreshToken)
-      - 如果 session 失效或刷新失败 -> relogin()
-      - 若完全失败 -> 发送通知
+    Maintain access_token / refresh_token in background.
+    Strategy:
+      - Each loop, check access_token expiry.
+      - If < 3600s to expire, try refresh (loginByRefreshToken).
+      - If session invalid or refresh fails -> relogin().
+      - On total failure -> notify.
     """
     def __init__(self, username: str, config: dict):
         super().__init__(daemon=True)
@@ -169,18 +169,18 @@ class TokenRefreshThread(threading.Thread):
                 self._refresh_cycle()
             except Exception as e:
                 handle_caught_exception(e, known=True)
-                logger.error("后台Token刷新循环出现异常")
-            # 计算下一次检查间隔
+                logger.error("Background token refresh loop error")
+            # Next check interval
             wait_seconds = self._compute_wait_interval()
             self.stop_event.wait(wait_seconds)
 
     def _compute_wait_interval(self) -> int:
         """
-        基于缓存中 access_token 过期时间决定下一次检查:
-          - 距离过期 > 6h: 3h 后检查
-          - 距离过期 1h~6h: 1h 后检查
-          - 距离过期 < 1h: 10 分钟后检查
-          - 没有过期信息: 默认 6 小时
+        Decide next check based on access_token expiry:
+          - >6h remaining: check in 3h
+          - 1h~6h: check in 1h
+          - <1h: check in 10m
+          - unknown: 6h
         """
         try:
             cache = _load_token_cache(self.username)
@@ -190,7 +190,7 @@ class TokenRefreshThread(threading.Thread):
             now = int(time.time())
             remain = exp - now
             if remain <= 0:
-                return 300  # 已过期, 5分钟后再试(避免频密)
+                return 300  # expired, retry in 5m
             if remain > 6 * 3600:
                 return 3 * 3600
             if remain > 3600:
@@ -205,126 +205,205 @@ class TokenRefreshThread(threading.Thread):
             with steam_client_mutex:
                 if not steam_client:
                     return
-                # 如果会话还活着且 access_token 也未临期则直接返回
+                # Check token window
                 cache = _load_token_cache(self.username)
                 access_exp = cache.get("access_token_exp_timestamp", 0)
                 now = int(time.time())
-                need_refresh = False
-                if access_exp and access_exp - now < 3600:  # 1 小时内过期
-                    need_refresh = True
+                need_refresh = bool(access_exp and access_exp - now < 3600)
 
                 if not steam_client.is_session_alive():
-                    logger.info("检测到会话已失效, 尝试刷新会话...")
-                    # 优先使用 refresh_token
+                    logger.info("Session invalid. Attempting refresh...")
+                    # Prefer refresh_token
                     cache = _load_token_cache(self.username)
                     refresh_token = cache.get("refresh_token")
                     steamid = cache.get("steamid")
                     if refresh_token and steamid:
-                        logger.info("尝试使用 refresh_token 刷新 access_token...")
+                        logger.info("Refreshing access_token via refresh_token...")
                         try:
                             auth_info = steam_client.loginByRefreshToken(refresh_token, steamid, steam_client.steam_guard)
                             if auth_info and isinstance(auth_info, dict):
                                 _save_token_cache(self.username, auth_info)
-                                logger.info("后台 refresh_token 刷新成功")
+                                logger.info("Background refresh_token succeeded")
                                 return
                             else:
-                                raise Exception("loginByRefreshToken 未返回有效 auth_info")
+                                raise Exception("loginByRefreshToken returned no valid auth_info")
                         except Exception as e:
                             handle_caught_exception(e, known=True)
-                            logger.warning("使用 refresh_token 刷新失败: %s", e)
-                    # refresh_token 失败后回退 relogin
-                    logger.info("refresh_token 刷新失败或不可用, 尝试使用账密重新登录...")
+                            logger.warning("Refresh via refresh_token failed: %s", e)
+                    # Fallback to relogin
+                    logger.info("Refresh failed or unavailable. Trying username/password relogin...")
                     try:
                         auth_info = steam_client.relogin()
                         if auth_info and isinstance(auth_info, dict):
                             _save_token_cache(self.username, auth_info)
-                            logger.info("使用账密重新登录成功")
+                            logger.info("Relogin succeeded")
                             return
                         else:
-                            raise Exception("relogin 未返回有效 auth_info")
+                            raise Exception("relogin returned no valid auth_info")
                     except Exception as e:
                         handle_caught_exception(e, known=True)
-                        logger.error("会话失效，刷新失败")
-                        send_notification("Steam 会话刷新失败", "会话失效后 refresh_token 与重登录均失败，请检查账号或网络")
+                        logger.error("Session invalid and refresh failed")
+                        send_notification("Steam session refresh failed", "After invalidation both refresh_token and relogin failed. Check account or network.")
                         return
 
                 if need_refresh:
-                    # 使用 refresh_token 刷新
+                    # Try refresh_token
                     cache = _load_token_cache(self.username)
                     refresh_token = cache.get("refresh_token")
                     steamid = cache.get("steamid")
                     if refresh_token and steamid:
-                        logger.info("尝试使用 refresh_token 刷新 access_token...")
+                        logger.info("Refreshing access_token via refresh_token...")
                         try:
                             auth_info = steam_client.loginByRefreshToken(refresh_token, steamid, steam_client.steam_guard)
                             if auth_info and isinstance(auth_info, dict):
                                 _save_token_cache(self.username, auth_info)
-                                logger.info("后台 refresh_token 刷新成功")
+                                logger.info("Background refresh_token succeeded")
                                 return
                             else:
-                                raise Exception("loginByRefreshToken 未返回有效 auth_info")
+                                raise Exception("loginByRefreshToken returned no valid auth_info")
                         except Exception as e:
                             handle_caught_exception(e, known=True)
-                            logger.warning("使用 refresh_token 刷新失败: %s", e)
+                            logger.warning("Refresh via refresh_token failed: %s", e)
 
-                    # 再次尝试 relogin
+                    # Try relogin
                     try:
                         auth_info = steam_client.relogin()
                         if auth_info and isinstance(auth_info, dict):
                             _save_token_cache(self.username, auth_info)
-                            logger.info("relogin 成功(刷新阶段)")
+                            logger.info("Relogin succeeded (refresh phase)")
                             return
                     except Exception as e:
                         handle_caught_exception(e, known=True)
 
-                    logger.error("后台刷新失败，无法延长会话")
-                    send_notification("Steam 会话维持失败", "自动刷新与重登录均失败，请检查账号或网络")
+                    logger.error("Background refresh failed. Unable to extend session")
+                    send_notification("Steam session maintenance failed", "Automatic refresh and relogin both failed. Check account or network.")
         except requests.exceptions.RequestException:
-            logger.error('无法检查Steam会话状态，请检查网络连接或代理设置')
+            logger.error('Cannot check Steam session state. Check network or proxy settings.')
         except Exception as e:
             handle_caught_exception(e, known=False)
 
     def stop(self):
         self.stop_event.set()
 
-# ================== 登录主流程 ==========================
+# ================== Main login flow ==========================
+
+def login_to_steam_single_account(account_info: dict, config: dict):
+    """
+    Login a single Steam account with the provided account information.
+    Returns SteamClient instance or None if login fails.
+    """
+    username = account_info.get("steam_username", "")
+    password = account_info.get("steam_password", "")
+    if not username or not password:
+        logger.error(f"Account {account_info.get('name', 'Unknown')}: Username or password is empty")
+        return None
+
+    config["use_proxies"] = config.get("use_proxies", False)
+    if not _check_proxy_availability(config):
+        return None
+
+    token_cache = _load_token_cache(username)
+    now = int(time.time())
+
+    # 1. Use cached access_token
+    access_token = token_cache.get("access_token")
+    access_exp = token_cache.get("access_token_exp_timestamp", 0)
+    steamid_cache = token_cache.get("steamid")
+    if access_token and steamid_cache and access_exp and access_exp - now > 60:
+        logger.info(f"Using cached access token for {username}")
+        try:
+            if config.get("use_proxies", False):
+                client = SteamClient(api_key="", proxies=config["proxies"])
+            else:
+                client = SteamClient(api_key="")
+            _setup_client_session(client, config)
+            if client.set_and_verify_access_token(steamid_cache, access_token, account_info):
+                logger.info(f"Cached access token login succeeded for {username}")
+                return client
+        except Exception as e:
+            logger.warning(f"Cached access token failed for {username}: {str(e)}")
+
+    # 2. Try refresh_token login
+    refresh_token = token_cache.get("refresh_token")
+    if refresh_token:
+        logger.info(f"Trying refresh token login for {username}")
+        try:
+            if config.get("use_proxies", False):
+                client = SteamClient(api_key="", proxies=config["proxies"])
+            else:
+                client = SteamClient(api_key="")
+            _setup_client_session(client, config)
+            auth_info = client.loginByRefreshToken(refresh_token, steamid_cache, account_info)
+            if client.is_session_alive():
+                logger.info(f"Refresh token login succeeded for {username}")
+                if auth_info and isinstance(auth_info, dict):
+                    _save_token_cache(username, auth_info)
+                return client
+        except Exception as e:
+            logger.warning(f"Refresh token login failed for {username}: {str(e)}")
+
+    # 3. Username/password login
+    logger.info(f"Logging in to Steam with username/password for {username}")
+    try:
+        if config.get("use_proxies", False):
+            client = SteamClient(api_key="", proxies=config["proxies"])
+        else:
+            client = SteamClient(api_key="")
+        _setup_client_session(client, config)
+        if config['use_proxies'] and config['steam_local_accelerate']:
+            logger.warning('Both built-in accelerator and proxy are enabled. This is not recommended.')
+        logger.info("Signing in...")
+        auth_info = client.login(username, password, account_info)
+        if client.is_session_alive():
+            logger.info(f"Username/password login succeeded for {username}")
+            if auth_info and isinstance(auth_info, dict):
+                _save_token_cache(username, auth_info)
+            return client
+        else:
+            logger.error(f"Login failed for {username}")
+            return None
+    except Exception as e:
+        logger.error(f"Login error for {username}: {str(e)}")
+        handle_caught_exception(e, known=True)
+        return None
+
 
 def login_to_steam(config: dict):
     """
-    登录策略 (优先级):
-    1) 缓存的 access_token (未过期)
-    2) refresh_token 登录
-    3) 账密登录
+    Login strategy priority:
+    1) Cached access_token (not expired)
+    2) refresh_token login
+    3) Username/password login
     """
     global steam_client, token_refresh_thread
 
-    # 读取Steam账号信息
+    # Read Steam account info
     try:
         with open(STEAM_ACCOUNT_INFO_FILE_PATH, "r", encoding=get_encoding(STEAM_ACCOUNT_INFO_FILE_PATH)) as f:
             try:
                 steam_account_info = json5.loads(f.read())
             except Exception as e:
                 handle_caught_exception(e, known=True)
-                logger.error("检测到" + STEAM_ACCOUNT_INFO_FILE_PATH + "格式错误, 请检查配置文件格式是否正确! ")
+                logger.error("Detected invalid format in " + STEAM_ACCOUNT_INFO_FILE_PATH + ". Check config file.")
                 pause()
                 return None
     except FileNotFoundError:
-        logger.error("未检测到" + STEAM_ACCOUNT_INFO_FILE_PATH + ", 请添加后再进行操作!")
+        logger.error("Missing " + STEAM_ACCOUNT_INFO_FILE_PATH + ". Add it first.")
         pause()
         return None
 
     if not isinstance(steam_account_info, dict):
-        logger.error("配置文件格式错误，请检查配置文件")
+        logger.error("Invalid config structure. Check config file.")
         return None
     for key, value in steam_account_info.items():
         if not value:
-            logger.error(f"Steam账号配置文件中 {key} 为空，请检查配置文件")
+            logger.error(f"Key {key} in Steam account config is empty. Check config.")
             return None
 
     username = steam_account_info.get("steam_username", "")
     password = steam_account_info.get("steam_password", "")
     if not username or not password:
-        logger.error("Steam用户名或密码为空，请检查配置文件")
+        logger.error("Steam username or password is empty. Check config.")
         return None
 
     config["use_proxies"] = config.get("use_proxies", False)
@@ -335,12 +414,12 @@ def login_to_steam(config: dict):
     token_cache = _load_token_cache(username)
     now = int(time.time())
 
-    # 1. 尝试使用缓存 access_token
+    # 1. Use cached access_token
     access_token = token_cache.get("access_token")
     access_exp = token_cache.get("access_token_exp_timestamp", 0)
     steamid_cache = token_cache.get("steamid")
     if access_token and steamid_cache and access_exp and access_exp - now > 60:
-        logger.info("检测到缓存的未过期 access_token, 尝试直接恢复会话...")
+        logger.info("Found cached non-expired access_token. Restoring session...")
         try:
             if config.get("use_proxies", False):
                 client = SteamClient(api_key="", proxies=config["proxies"])
@@ -348,33 +427,33 @@ def login_to_steam(config: dict):
                 client = SteamClient(api_key="")
             _setup_client_session(client, config)
             if client.set_and_verify_access_token(steamid_cache, access_token, steam_account_info):
-                logger.info("使用缓存 access_token 登录成功")
+                logger.info("Login with cached access_token succeeded")
                 steam_client = client
                 static.STEAM_ACCOUNT_NAME = client.username or username
                 static.STEAM_64_ID = client.get_steam64id_from_cookies()
-                # 启动刷新线程
+                # Start refresh thread
                 if token_refresh_thread is None or not token_refresh_thread.is_alive():
                     _start_token_refresh_thread(username, config)
                 return steam_client
             else:
-                logger.warning("缓存 access_token 已失效，进入 refresh_token 流程")
+                logger.warning("Cached access_token invalid. Falling back to refresh_token flow")
         except Exception as e:
             handle_caught_exception(e, known=True)
-            logger.warning("使用缓存 access_token 恢复失败")
+            logger.warning("Restore via cached access_token failed")
 
-    # 2. 尝试 refresh_token 登录
+    # 2. Try refresh_token login
     refresh_token = token_cache.get("refresh_token")
     refresh_exp = token_cache.get("refresh_token_exp_timestamp", 0)
     if refresh_token and steamid_cache:
         if refresh_exp and refresh_exp <= now:
-            logger.warning("refresh_token 已过期，将回退到账密登录")
+            logger.warning("refresh_token expired. Falling back to username/password login")
         else:
             remaining = refresh_exp - now if refresh_exp else None
             if remaining:
                 hours = remaining // 3600
                 if hours > 0:
-                    logger.info(f"refresh_token 预计还有 ~{hours} 小时过期")
-            logger.info("尝试使用 refresh_token 登录...")
+                    logger.info(f"refresh_token expires in ~{hours} hour(s)")
+            logger.info("Trying login via refresh_token...")
             try:
                 if config.get("use_proxies", False):
                     client = SteamClient(api_key="", proxies=config["proxies"])
@@ -383,7 +462,7 @@ def login_to_steam(config: dict):
                 _setup_client_session(client, config)
                 auth_info = client.loginByRefreshToken(refresh_token, steamid_cache, steam_account_info)
                 if auth_info and client.is_session_alive():
-                    logger.info("使用 refresh_token 登录成功")
+                    logger.info("Login via refresh_token succeeded")
                     steam_client = client
                     _save_token_cache(username, auth_info)
                     static.STEAM_ACCOUNT_NAME = client.username or username
@@ -392,13 +471,13 @@ def login_to_steam(config: dict):
                         _start_token_refresh_thread(username, config)
                     return steam_client
                 else:
-                    logger.warning("refresh_token 登录失败，将回退到账密登录")
+                    logger.warning("refresh_token login failed. Falling back to username/password")
             except Exception as e:
                 handle_caught_exception(e, known=True)
-                logger.warning("refresh_token 登录失败，将回退到账密登录")
+                logger.warning("refresh_token login failed. Falling back to username/password")
 
-    # 3. 账密登录
-    logger.info("正在使用账密登录Steam...")
+    # 3. Username/password login
+    logger.info("Logging in to Steam with username/password...")
     try:
         if config.get("use_proxies", False):
             client = SteamClient(api_key="", proxies=config["proxies"])
@@ -406,11 +485,11 @@ def login_to_steam(config: dict):
             client = SteamClient(api_key="")
         _setup_client_session(client, config)
         if config['use_proxies'] and config['steam_local_accelerate']:
-            logger.warning('检测到你已经同时开启内置加速和代理功能！正常情况下不推荐通过这种方式使用软件')
-        logger.info("正在登录...")
+            logger.warning('Both built-in accelerator and proxy are enabled. This is not recommended.')
+        logger.info("Signing in...")
         auth_info = client.login(username, password, steam_account_info)
         if client.is_session_alive():
-            logger.info("账密登录成功")
+            logger.info("Username/password login succeeded")
             steam_client = client
             if auth_info and isinstance(auth_info, dict):
                 _save_token_cache(username, auth_info)
@@ -420,37 +499,38 @@ def login_to_steam(config: dict):
                 _start_token_refresh_thread(username, config)
             return steam_client
         else:
-            logger.error("登录失败")
+            logger.error("Login failed")
             return None
     except FileNotFoundError as e:
         handle_caught_exception(e, known=True)
-        logger.error("未检测到" + STEAM_ACCOUNT_INFO_FILE_PATH + ", 请添加后再进行操作! ")
+        logger.error("Missing " + STEAM_ACCOUNT_INFO_FILE_PATH + ". Add it first.")
         pause()
         return None
     except (SSLCertVerificationError, SSLError):
         if config["steam_local_accelerate"]:
-            logger.error("登录失败. 你开启了本地加速, 但是未关闭SSL证书验证. 请在配置文件中将steam_login_ignore_ssl_error设置为true")
+            logger.error("Login failed. Local acceleration enabled but SSL verification not disabled. Set steam_login_ignore_ssl_error=true.")
         else:
-            logger.error("登录失败. SSL证书验证错误! 若您确定网络环境安全, 可尝试将配置文件中的steam_login_ignore_ssl_error设置为true\n")
+            logger.error("Login failed. SSL certificate verification error. If your network is trusted, set steam_login_ignore_ssl_error=true.")
         pause()
         return None
     except (requests.exceptions.ConnectionError, TimeoutError):
         logger.error(
-            "网络错误! \n强烈建议使用Steamauto内置加速，仅需在配置文件中将steam_login_ignore_ssl_error和steam_local_accelerate设置为true即可使用 \n注意: 使用游戏加速器并不能解决问题，请使用代理软件如Clash/Proxifier等"
+            "Network error.\nUse the built-in accelerator by setting steam_login_ignore_ssl_error=true and steam_local_accelerate=true.\n"
+            "Note: game VPNs are not enough. Use real proxy tools like Clash/Proxifier."
         )
         pause()
         return None
     except (ApiException):
-        logger.error("登录失败. 请检查网络是否正常或被Steam屏蔽!\n")
+        logger.error("Login failed. Check network or possible Steam IP block.")
         pause()
         return None
     except (TypeError, AttributeError):
-        logger.error("登录失败.可能原因如下：\n 1 代理问题，不建议同时开启proxy和内置代理，或者是代理波动，可以重试\n2 Steam服务器波动，无法登录")
+        logger.error("Login failed. Possible causes:\n 1) Proxy issues. Do not enable both proxy and built-in accelerator, or unstable proxy.\n 2) Steam server fluctuation.")
         pause()
         return None
     except Exception as e:
         handle_caught_exception(e, known=True)
-        logger.error("登录失败. 请检查" + STEAM_ACCOUNT_INFO_FILE_PATH + "的格式或内容是否正确!\n")
+        logger.error("Login failed. Check the format and contents of " + STEAM_ACCOUNT_INFO_FILE_PATH + ".")
         pause()
         return None
 
@@ -461,16 +541,15 @@ def _start_token_refresh_thread(username: str, config: dict):
         token_refresh_thread.start()
     except Exception as e:
         handle_caught_exception(e, known=True)
-        logger.error("启动 TokenRefreshThread 失败")
+        logger.error("Failed to start TokenRefreshThread")
 
-# 用于外部报价处理器交互
-# 使用前请自行确保配置文件中 external_offer_handler 配置项正确
-# 具体使用方法请直接查看代码，不提供额外文档
+# For external offer handler integration.
+# Ensure external_offer_handler is correctly configured in your config.
 def external_handler(tradeOfferId, desc) -> bool:
     """
-    与外部报价处理器交互（与 plugins/ExternalAutoAcceptOffer.py 保持一致）：
-    1. 先查询 /getToAcceptOffers 列表，如果报价号已经在待接受列表中则先调用 /deleteOffer 删除该报价，然后返回 True（避免重复提交）
-    2. 否则将报价提交到 /submit，由外部处理器决定是否处理（根据返回的 deliver 字段）
+    Interact with external offer handler (aligned with plugins/ExternalAutoAcceptOffer.py):
+    1. Query /getToAcceptOffers. If offerId exists, call /deleteOffer to remove it, then return True.
+    2. Otherwise POST to /submit and let the external handler decide via the 'deliver' field.
     """
     if not isinstance(config, dict):
         return True
@@ -480,16 +559,15 @@ def external_handler(tradeOfferId, desc) -> bool:
 
     base_url = external_handler.rstrip("/")
 
-    # 先检查外部处理器的待接受列表，若已存在则删除并直接返回 True
+    # Check pending-accept list first
     try:
         get_url = f"{base_url}/getToAcceptOffers"
-        logger.info(f'正在检查外部报价处理器的待接受列表 {get_url}，是否包含报价号 {tradeOfferId} ...')
+        logger.info(f'Checking external handler pending list {get_url} for offer {tradeOfferId} ...')
         resp = requests.get(get_url, timeout=10)
         resp.raise_for_status()
         payload = resp.json()
         offers = payload.get("data", []) if isinstance(payload, dict) else []
 
-        # offers 期望为字典列表，每项包含 "offerId"
         for offer in offers:
             if not isinstance(offer, dict):
                 continue
@@ -497,46 +575,45 @@ def external_handler(tradeOfferId, desc) -> bool:
             if offer_id is None:
                 continue
             if str(offer_id) == str(tradeOfferId):
-                    logger.info(f'报价号 {tradeOfferId} 已存在于外部处理器的待接受列表，尝试删除后直接接受')
-                    try:
-                        delete_url = f"{base_url}/deleteOffer"
-                        del_resp = requests.post(delete_url, json={"offerId": offer_id}, timeout=10)
-                        del_resp.raise_for_status()
-                        del_result = del_resp.json()
-                        if isinstance(del_result, dict) and del_result.get("status") == "ok":
-                            logger.info(f"已从外部处理器删除报价: {tradeOfferId}")
-                        else:
-                            logger.error(f"从外部处理器删除报价失败: {tradeOfferId} -> {del_result}")
-                    except Exception as e:
-                        logger.error(f"向外部处理器请求删除报价时出错: {e}")
-                    return True
+                logger.info(f'Offer {tradeOfferId} found in external pending list. Deleting before accepting.')
+                try:
+                    delete_url = f"{base_url}/deleteOffer"
+                    del_resp = requests.post(delete_url, json={"offerId": offer_id}, timeout=10)
+                    del_resp.raise_for_status()
+                    del_result = del_resp.json()
+                    if isinstance(del_result, dict) and del_result.get("status") == "ok":
+                        logger.info(f"Removed offer from external handler: {tradeOfferId}")
+                    else:
+                        logger.error(f"Failed to remove offer from external handler: {tradeOfferId} -> {del_result}")
+                except Exception as e:
+                    logger.error(f"Error calling external handler to delete offer: {e}")
+                return True
     except Exception:
-        # 无法获取待接受列表时忽略此步，继续走提交逻辑
-        logger.debug("无法检查外部处理器的待接受列表，继续提交 /submit")
+        logger.debug("Failed to check external pending list. Proceeding to /submit")
 
-    # 提交到 /submit，由外部处理器决定是否处理
+    # Submit to /submit
     external_handler_url = base_url + "/submit"
     try:
         data = {
             "offerId": tradeOfferId,
             "description": desc
         }
-        logger.info(f'正在将报价号 {tradeOfferId} 发送到外部报价处理器 {external_handler_url} ...')
+        logger.info(f'Submitting offer {tradeOfferId} to external handler {external_handler_url} ...')
         response = requests.post(external_handler_url, json=data, timeout=15)
         try:
             result = response.json()
         except Exception:
-            logger.error(f'无法解析外部处理器 {external_handler_url} 的响应为 JSON，已跳过该报价')
+            logger.error(f'Unable to parse JSON from external handler {external_handler_url}. Skipping offer.')
             return False
 
         if isinstance(result, dict) and result.get('deliver'):
-            logger.info(f'外部报价处理器接受处理报价号 {tradeOfferId}')
+            logger.info(f'External handler accepted offer {tradeOfferId}')
             return True
         else:
-            logger.info(f'外部报价处理器拒绝报价号 {tradeOfferId}，已跳过')
+            logger.info(f'External handler rejected offer {tradeOfferId}. Skipping.')
             return False
     except Exception:
-        logger.error("无法连接到外部报价处理器，已跳过该报价")
+        logger.error("Cannot connect to external offer handler. Skipping this offer.")
         return False
 
 def accept_trade_offer(client: SteamClient, mutex, tradeOfferId, retry=False, desc="", network_retry_count=0, reportToExternal=True):
@@ -550,53 +627,52 @@ def accept_trade_offer(client: SteamClient, mutex, tradeOfferId, retry=False, de
     try:
         with mutex:
             client.accept_trade_offer(str(tradeOfferId))
-        send_notification(f'报价号：{tradeOfferId}\n{desc}', title='接受报价成功')
+        send_notification(f'Offer ID: {tradeOfferId}\n{desc}', title='Offer accepted')
         return True
     except Exception as e:
         if retry:
-            logger.error(f"接受报价号{tradeOfferId}失败！")
+            logger.error(f"Failed to accept offer {tradeOfferId}.")
             return False
 
-        # 网络错误重试
+        # Network retry
         if isinstance(e, RequestException):
             if network_retry_count < max_network_retries:
-                logger.warning(f"接受报价号{tradeOfferId}遇到网络错误，正在重试 ({network_retry_count + 1}/{max_network_retries})...")
+                logger.warning(f"Network error accepting offer {tradeOfferId}. Retrying ({network_retry_count + 1}/{max_network_retries})...")
                 handle_caught_exception(e, "SteamClient", known=True)
                 time.sleep(network_retry_delay)
                 return accept_trade_offer(
                     client, mutex, tradeOfferId, retry=False, desc=desc, network_retry_count=network_retry_count + 1
                 )
             else:
-                logger.error(f"接受报价号{tradeOfferId}网络错误重试次数已达到上限({max_network_retries})，操作失败")
+                logger.error(f"Max network retries reached for offer {tradeOfferId}. Operation failed.")
                 handle_caught_exception(e, "SteamClient", known=True)
-                send_notification(f'报价号：{tradeOfferId}\n{desc}', title='接受报价失败(网络错误)')
+                send_notification(f'Offer ID: {tradeOfferId}\n{desc}', title='Offer accept failed (network error)')
                 return False
 
         if isinstance(e, ValueError):
             if 'Accepted' in str(e):
-                logger.warning(f'报价号 {tradeOfferId} 已经处理过，无需再次处理')
+                logger.warning(f'Offer {tradeOfferId} already processed. Skipping.')
                 handle_caught_exception(e, "SteamClient", known=True)
                 return True
         if isinstance(e, (steampy.exceptions.ConfirmationExpected, steampy.exceptions.InvalidCredentials)):
-            logger.error(f"接受报价号{tradeOfferId}失败：会话或凭据无效，放弃本次处理")
+            logger.error(f"Failed to accept offer {tradeOfferId}: session or credentials invalid. Aborting.")
             handle_caught_exception(e, "SteamClient", known=True)
-            send_notification(f'报价号：{tradeOfferId}\n{desc}', title='接受报价失败(会话无效)')
+            send_notification(f'Offer ID: {tradeOfferId}\n{desc}', title='Offer accept failed (invalid session)')
             return False
         if isinstance(e, KeyError):
-            logger.error(f"接受报价号{tradeOfferId}失败！未找到报价号或报价号已过期")
+            logger.error(f"Failed to accept offer {tradeOfferId}: offer not found or expired.")
             return False
 
-        # 其它错误统一处理
+        # Other errors
         handle_caught_exception(e, "SteamClient")
-        logger.error(f"接受报价号{tradeOfferId}失败！")
+        logger.error(f"Failed to accept offer {tradeOfferId}.")
 
         if 'substring not found' in str(e):
-            logger.error(f'由于Steam风控，报价号 {tradeOfferId} 处理失败，请检查IP/加速器/梯子')
+            logger.error(f'Offer {tradeOfferId} failed due to Steam risk control. Check IP/accelerator/proxy.')
             handle_caught_exception(e, "SteamClient", known=True)
             return False
 
-
-        send_notification(f'报价号：{tradeOfferId}\n{desc}', title='接受报价失败')
+        send_notification(f'Offer ID: {tradeOfferId}\n{desc}', title='Offer accept failed')
         return False
 
 def get_cs2_inventory(client: SteamClient, mutex):
@@ -604,8 +680,8 @@ def get_cs2_inventory(client: SteamClient, mutex):
     try:
         with mutex:
             inventory = client.get_my_inventory(game=GameOptions.CS)  # type: ignore
-            logger.log(5, '获取到的Steam库存:' + json.dumps(inventory, ensure_ascii=False))
+            logger.log(5, 'Fetched Steam inventory: ' + json.dumps(inventory, ensure_ascii=False))
     except Exception as e:
         handle_caught_exception(e, "SteamClient", known=True)
-        send_notification('获取库存失败，请检查服务器网络', title='获取库存失败')
+        send_notification('Failed to fetch inventory. Check server network.', title='Inventory fetch failed')
     return inventory

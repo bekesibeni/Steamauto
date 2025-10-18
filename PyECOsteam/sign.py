@@ -7,46 +7,53 @@ import re
 
 
 def normalize_key(private_key_str):
-    # Remove surrounding whitespace
+    # Trim surrounding whitespace
     private_key_str = private_key_str.strip()
 
-    key_data = private_key_str.replace('-----BEGIN PRIVATE KEY-----\n', '').replace('\n-----END PRIVATE KEY-----', '').replace('\n', '')
+    # Strip headers/footers and newlines to get raw base64 data
+    key_data = (
+        private_key_str
+        .replace('-----BEGIN PRIVATE KEY-----\n', '')
+        .replace('\n-----END PRIVATE KEY-----', '')
+        .replace('\n', '')
+    )
 
-    # Ensure proper line breaks every 64 characters
+    # Reinsert line breaks every 64 characters
     key_data = re.sub(r'(.{64})', r'\1\n', key_data)
 
-    # Reconstruct the key with headers and footers
+    # Reconstruct PEM with headers/footers
     private_key_str = '-----BEGIN PRIVATE KEY-----\n' + key_data + '\n-----END PRIVATE KEY-----'
-
     return private_key_str
 
 
 def generate_rsa_signature(private_key_str, params):
-    # Normalize the key to ensure proper format
+    # Normalize the key to a valid PEM format
     private_key_str = normalize_key(private_key_str)
 
-    # 加载私钥
+    # Load private key
     private_key = RSA.import_key(private_key_str)
 
-    # 拼接参数，遇到字典或列表则转换成JSON字符串
+    # Concatenate parameters. Dicts/lists are JSON-stringified.
     message_parts = []
-    for key in sorted(params.keys(),key=str.lower):
+    for key in sorted(params.keys(), key=str.lower):
         value = params[key]
-        if isinstance(value, dict) or isinstance(value,list):
-            message_parts.append('{}={}'.format(key,json.dumps(value,sort_keys=False,ensure_ascii=False,separators=(',',':'))))
+        if isinstance(value, (dict, list)):
+            message_parts.append(
+                f"{key}=" + json.dumps(value, sort_keys=False, ensure_ascii=False, separators=(',', ':'))
+            )
         else:
             if value is None:
                 continue
-            message_parts.append('{}={}'.format(key,value))
+            message_parts.append(f"{key}={value}")
 
     message = "&".join(message_parts)
 
-    # 使用SHA256哈希生成消息摘要
+    # Hash with SHA256
     hash_value = SHA256.new(message.encode("utf-8"))
 
-    # 使用私钥对摘要进行签名
+    # Sign the hash with RSA PKCS#1 v1.5
     signature = pkcs1_15.new(private_key).sign(hash_value)
 
-    # 将签名转换为base64编码
+    # Base64-encode the signature
     signature_base64 = base64.b64encode(signature).decode("utf-8")
     return signature_base64

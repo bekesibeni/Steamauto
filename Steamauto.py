@@ -15,27 +15,32 @@ from colorama import Fore, Style
 
 import utils.static as static
 from steampy.client import SteamClient
-from utils.code_updater import attempt_auto_update_github
+# Auto-update functionality removed
 from utils.logger import handle_caught_exception, logger
 from utils.notifier import send_notification
-from utils.old_version_patches import patch
+# Old version patches removed (auto-update disabled)
 from utils.static import (BUILD_INFO, CONFIG_FILE_PATH, CONFIG_FOLDER,
                           CURRENT_VERSION, DEFAULT_CONFIG_JSON,
                           DEFAULT_STEAM_ACCOUNT_JSON, INTERNAL_PLUGINS,
                           PLUGIN_FOLDER, SESSION_FOLDER,
                           STEAM_ACCOUNT_INFO_FILE_PATH)
 from utils.steam_client import login_to_steam, steam_client_mutex
+from utils.multi_account_manager import initialize_multi_account_manager, get_multi_account_manager
 from utils.tools import (calculate_sha256, exit_code, get_encoding, jobHandler,
                          pause)
 
 
 def handle_global_exception(exc_type, exc_value, exc_traceback):
     logger.exception(
-        "程序发生致命错误，请将此界面截图，并提交最新的log文件到https://github.com/jiajiaxd/Steamauto/issues",
+        "A fatal error occurred. Screenshot this screen and submit the latest log file at https://github.com/jiajiaxd/Steamauto/issues",
         exc_info=(exc_type, exc_value, exc_traceback),
     )
-    logger.error("由于出现致命错误，程序即将退出...")
-    pause()
+    logger.error("Exiting due to a fatal error...")
+    try:
+        pause()
+    except Exception:
+        # Handle cases where pause() also fails in non-interactive environments
+        logger.info("Program exits")
 
 
 def set_exit_code(code):
@@ -43,39 +48,34 @@ def set_exit_code(code):
     exit_code = code
 
 
-# 文件缺失或格式错误返回0，首次运行返回1，非首次运行返回2
+# Return 0 for missing/invalid files, 1 for first run, 2 for non-first run
 def init_files_and_params() -> int:
     global config
-    patch()
-    logger.info("欢迎使用Steamauto Github仓库:https://github.com/Steamauto/Steamauto")
-    logger.info("欢迎加入Steamauto 官方QQ群 群号: 425721057")
-    logger.info("若您觉得Steamauto好用, 请给予Star支持, 谢谢! \n")
-    logger.info(f"{Fore.RED+Style.BRIGHT}！！！ 本程序完全{Fore.YELLOW}免费开源 {Fore.RED}若有人向你售卖，请立即投诉并申请退款 ！！！ \n")
-    logger.info(f"当前版本: {CURRENT_VERSION}   编译信息: {BUILD_INFO}")
+    # patch() removed - auto-update disabled
+    logger.info("Welcome to the Steamauto GitHub repo: https://github.com/Steamauto/Steamauto")
+    logger.info("If Steamauto helps, please star the repo. Thanks!\n")
+    logger.info(f"{Fore.RED+Style.BRIGHT}!!! This program is {Fore.YELLOW}free and open source{Fore.RED}. If anyone sells it to you, complain and request a refund. !!!\n")
+    logger.info(f"Current version: {CURRENT_VERSION}   Build info: {BUILD_INFO}")
     try:
         with open(CONFIG_FILE_PATH, "r", encoding=get_encoding(CONFIG_FILE_PATH)) as f:
             config = json5.load(f)
     except:
         config = {}
-    if config.get("source_code_auto_update", False):
-        if not hasattr(sys, '_MEIPASS'):
-            attempt_auto_update_github(CURRENT_VERSION)
-    else:
-        try:
-            from utils import cloud_service
-
-            cloud_service.checkVersion()
-            cloud_service.getAds()
-        except Exception as e:
-            logger.warning('无法使用云服务')
-    logger.info("正在初始化...")
+    # Auto-update functionality completely disabled
+    try:
+        from utils import cloud_service
+        cloud_service.checkVersion()
+        cloud_service.getAds()
+    except Exception as e:
+        logger.warning('Cloud service unavailable')
+    logger.info("Initializing...")
     first_run = False
     if not os.path.exists(CONFIG_FOLDER):
         os.mkdir(CONFIG_FOLDER)
     if not os.path.exists(CONFIG_FILE_PATH):
         with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
             f.write(DEFAULT_CONFIG_JSON)
-        logger.info("检测到首次运行, 已为您生成" + CONFIG_FILE_PATH + ", 请按照README提示填写配置文件! ")
+        logger.info("First run detected. Generated " + CONFIG_FILE_PATH + ". Fill it following the README.")
         first_run = True
     else:
         with open(CONFIG_FILE_PATH, "r", encoding=get_encoding(CONFIG_FILE_PATH)) as f:
@@ -83,12 +83,12 @@ def init_files_and_params() -> int:
                 config = json5.load(f)
             except Exception as e:
                 handle_caught_exception(e, known=True)
-                logger.error("检测到" + CONFIG_FILE_PATH + "格式错误, 请检查配置文件格式是否正确! ")
+                logger.error("Invalid " + CONFIG_FILE_PATH + " format. Check your config.")
                 return 0
     if not os.path.exists(STEAM_ACCOUNT_INFO_FILE_PATH):
         with open(STEAM_ACCOUNT_INFO_FILE_PATH, "w", encoding="utf-8") as f:
             f.write(DEFAULT_STEAM_ACCOUNT_JSON)
-            logger.info("检测到首次运行, 已为您生成" + STEAM_ACCOUNT_INFO_FILE_PATH + ", 请按照README提示填写配置文件! ")
+            logger.info("First run detected. Generated " + STEAM_ACCOUNT_INFO_FILE_PATH + ". Fill it following the README.")
             first_run = True
 
     if not first_run:
@@ -128,40 +128,40 @@ def get_plugins_folder():
                     plugin_sha256 = calculate_sha256(plugin_absolute)
                     if local_plugin_sha256 != plugin_sha256:
                         if plugin not in config.get('plugin_whitelist', []):
-                            logger.info('检测到插件' + plugin + '有更新，已自动更新 如果不需要更新请在配置文件中将该插件加入白名单')
+                            logger.info('Detected update for plugin ' + plugin + '. Auto-updated. Add it to plugin_whitelist to skip updates.')
                             shutil.copy(plugin_absolute, local_plugin_absolute)
                         else:
-                            logger.info('插件' + plugin + '与本地版本不同 由于已被加入白名单，不会自动更新')
+                            logger.info('Plugin ' + plugin + ' differs from bundled version. It is whitelisted, so it will not be auto-updated.')
     return os.path.join(base_path, PLUGIN_FOLDER)
 
 
 def import_module_from_file(module_name, file_path):
     """
-    从指定文件路径动态导入模块。
+    Dynamically import a module from a given file path.
 
-    参数：
-        module_name (str): 模块的名称（应在当前环境中唯一）。
-        file_path (str): 模块的文件路径。
+    Args:
+        module_name (str): Unique name for the module in the current environment.
+        file_path (str): Path to the module file.
 
-    返回：
-        module: 导入的模块对象。
+    Returns:
+        module: The imported module object.
     """
     try:
         spec = importlib.util.spec_from_file_location(module_name, file_path)
         if spec is None:
-            raise ImportError(f"无法从路径 '{file_path}' 创建模块规格")
+            raise ImportError(f"Failed to create module spec from '{file_path}'")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)  # type: ignore
         sys.modules[module_name] = module
         return module
     except Exception as e:
         handle_caught_exception(e, known=True)
-        logger.error(f"导入模块 '{module_name}' 时出现错误")
+        logger.error(f"Error importing module '{module_name}'")
         return None
 
 
 def import_all_plugins():
-    # 自动导入所有插件
+    # Auto import all plugins
     plugin_files = [f for f in os.listdir(get_plugins_folder()) if f.endswith(".py") and f != "__init__.py"]
 
     for plugin_file in plugin_files:
@@ -170,9 +170,9 @@ def import_all_plugins():
 
 
 def camel_to_snake(name):
-    if name == "ECOsteamPlugin":  # 特殊处理
+    if name == "ECOsteamPlugin":  # special case
         return "ecosteam"
-    if name == "ECOsteam":  # 特殊处理
+    if name == "ECOsteam":  # special case
         return "ecosteam"
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
     return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
@@ -181,13 +181,13 @@ def camel_to_snake(name):
 def get_plugin_classes():
     plugin_classes = {}
     for name, obj in sys.modules.items():
-        if name.startswith(f"{PLUGIN_FOLDER}.") and name != f"{PLUGIN_FOLDER}.__init__":
+        if name.startswith(f"{PLUGIN_FOLDER}.") and name != f"{PLUGIN_FOLDER}.__init__":  # noqa: E501
             plugin_name = name.replace(f"{PLUGIN_FOLDER}.", '')
             plugin_name = camel_to_snake(plugin_name)
             plugin_classes[plugin_name] = obj
-    # 返回的文件结构：
+    # Returned structure:
     # {
-    #     "[插件名]": [插件类],
+    #     "[plugin_name]": [plugin_class],
     #     ...
     # }
     return plugin_classes
@@ -196,16 +196,17 @@ def get_plugin_classes():
 def get_plugins_enabled(steam_client: SteamClient, steam_client_mutex):
     global config
     plugins_enabled = []
-    plugin_modules = get_plugin_classes()  # 获取所有插件类
+    plugin_modules = get_plugin_classes()  # get all plugin classes
 
     for plugin_key, plugin_module in plugin_modules.items():
-        # 判断配置文件里是否存在 plugin_key 且已启用
+        # enabled if exists in config and enable==True,
+        # or not in config and not an internal plugin (i.e., user plugin)
         if (plugin_key in config and config[plugin_key].get("enable")) or ((plugin_key not in config) and (plugin_key not in INTERNAL_PLUGINS)):
             if plugin_key not in config:
-                logger.info(f'已加载自定义插件 {plugin_key}')
-            # 遍历插件模块里的所有类
+                logger.info(f'Loaded custom plugin {plugin_key}')
+            # iterate classes in the module
             for cls_name, cls_obj in inspect.getmembers(plugin_module, inspect.isclass):
-                # 根据构造函数的形参，对号入座。用kwargs可以避免顺序不一致的问题
+                # build kwargs based on constructor signature
                 init_signature = inspect.signature(cls_obj.__init__)
                 init_kwargs = {}
                 unknown_class = False
@@ -222,13 +223,12 @@ def get_plugins_enabled(steam_client: SteamClient, steam_client_mutex):
                     elif param_name == "self":
                         continue
                     else:
-                        # 根本不认识这个类
                         unknown_class = True
                         break
                 if unknown_class:
                     continue
 
-                # 确定这个类有init()函数 并且这个函数为无参数的
+                # must have init(self) with no extra params
                 if not hasattr(cls_obj, "init"):
                     continue
                 init_signature = inspect.signature(cls_obj.init)
@@ -242,7 +242,7 @@ def get_plugins_enabled(steam_client: SteamClient, steam_client_mutex):
 
 def plugins_check(plugins_enabled):
     if len(plugins_enabled) == 0:
-        logger.error("未启用任何插件, 请检查" + CONFIG_FILE_PATH + "是否正确! ")
+        logger.error("No plugins enabled. Check " + CONFIG_FILE_PATH + ".")
         return 2
     for plugin in plugins_enabled:
         if plugin.init():
@@ -259,7 +259,7 @@ def get_steam_client_mutexs(num):
 
 def init_plugins_and_start(steam_client, steam_client_mutex):
     plugins_enabled = get_plugins_enabled(steam_client, steam_client_mutex)
-    logger.info("初始化完成, 开始运行插件!")
+    logger.info("Initialization done. Starting plugins!")
     print("\n")
     time.sleep(0.1)
     if len(plugins_enabled) == 1:
@@ -274,7 +274,7 @@ def init_plugins_and_start(steam_client, steam_client_mutex):
         for thread in threads:
             thread.join()
     if exit_code.get() != 0:
-        logger.warning("所有插件都已经退出！这不是一个正常情况，请检查配置文件！")
+        logger.warning("All plugins have exited. This is abnormal. Check your config.")
 
 
 tried_exit = False
@@ -285,18 +285,18 @@ def exit_app(signal_, frame):
     if not tried_exit:
         tried_exit = True
         jobHandler.terminate_all()
-        logger.warning("正在退出...若无响应，请再按一次Ctrl+C或者直接关闭窗口")
+        logger.warning("Exiting... If unresponsive, press Ctrl+C again or close the window.")
         os._exit(exit_code.get())
     else:
-        logger.warning("程序已经强制退出")
+        logger.warning("Program force-exited")
         pid = os.getpid()
         os.kill(pid, signal.SIGTERM)
 
 
-# 主函数
+# Main
 def main():
     global config
-    # 初始化
+    # init
     init_status = init_files_and_params()
     if init_status == 0:
         pause()
@@ -305,33 +305,49 @@ def main():
         pause()
         return 0
 
-    steam_client = None
-    steam_client = SteamClient('')
-    steam_client = login_to_steam(config)
-    if steam_client is None:
-        send_notification('登录Steam失败，程序停止运行')
+    # Initialize multi-account manager
+    if not initialize_multi_account_manager(config):
+        send_notification('Failed to initialize multi-account manager. Program will stop.')
         pause()
         return 1
-    # 仅用于获取启用的插件
+        
+    multi_account_manager = get_multi_account_manager()
+    if not multi_account_manager:
+        send_notification('Multi-account manager not available. Program will stop.')
+        pause()
+        return 1
+        
+    # For backward compatibility, set the first account as the primary client
+    all_clients = multi_account_manager.get_all_clients()
+    if not all_clients:
+        send_notification('No Steam accounts successfully logged in. Program will stop.')
+        pause()
+        return 1
+        
+    # Use the first available client as the primary (for plugins that still expect single client)
+    steam_client = list(all_clients.values())[0]
+    static.STEAM_ACCOUNT_NAME = steam_client.username
+    static.STEAM_64_ID = steam_client.get_steam64id_from_cookies()
+    # only to discover enabled plugins
     import_all_plugins()
     plugins_enabled = get_plugins_enabled(steam_client, steam_client_mutex)
-    # 检查插件是否正确初始化
+    # verify plugin init
     plugins_check_status = plugins_check(plugins_enabled)
     if plugins_check_status == 0:
-        logger.info("存在插件无法正常初始化, Steamauto即将退出！ ")
+        logger.info("Some plugins failed to initialize. Steamauto will exit.")
         pause()
         return 1
 
     if steam_client is not None:
-        send_notification('Steamauto 已经成功登录Steam并开始运行')
+        send_notification('Steamauto logged into Steam and started running')
         init_plugins_and_start(steam_client, steam_client_mutex)
 
-    logger.info("由于所有插件已经关闭,程序即将退出...")
+    logger.info("All plugins have stopped. Exiting...")
     pause()
     return 1
 
 
-# 程序运行开始处
+# Entry
 if __name__ == "__main__":
     sys.excepthook = handle_global_exception
     signal.signal(signal.SIGINT, exit_app)

@@ -18,7 +18,7 @@ class UUAutoAcceptOffer:
     def init(self) -> bool:
         token = get_valid_token_for_uu()
         if not token:
-            self.logger.error("悠悠有品登录失败！即将关闭程序！")
+            self.logger.error("UUYoupin login failed. Exiting.")
             exit_code.set(1)
             return True
         return False
@@ -27,7 +27,7 @@ class UUAutoAcceptOffer:
         uuyoupin = None
         token = get_valid_token_for_uu()
         if not token:
-            self.logger.error("由于登录失败，插件将自动退出")
+            self.logger.error("Login failed. Plugin will exit.")
             exit_code.set(1)
             return 1
         else:
@@ -38,37 +38,50 @@ class UUAutoAcceptOffer:
             while True:
                 try:
                     uuyoupin.send_device_info()
-                    self.logger.info("正在检查悠悠有品待发货信息...")
+                    self.logger.info("Checking UUYoupin pending deliveries...")
                     uu_wait_deliver_list = uuyoupin.get_wait_deliver_list()
                     len_uu_wait_deliver_list = len(uu_wait_deliver_list)
-                    self.logger.info("" + str(len_uu_wait_deliver_list) + "个悠悠有品待发货订单")
+                    self.logger.info(f"{len_uu_wait_deliver_list} UUYoupin pending orders")
                     if len(uu_wait_deliver_list) != 0:
                         for item in uu_wait_deliver_list:
                             accepted = False
-                            self.logger.info(f"正在接受悠悠有品待发货报价, 商品名: {item['item_name']}, " f"报价ID: {item['offer_id']}")
+                            self.logger.info(
+                                f"Accepting UUYoupin pending offer. Item: {item['item_name']}, "
+                                f"Offer ID: {item['offer_id']}"
+                            )
                             if item["offer_id"] is None:
-                                self.logger.warning("此订单为需要手动发货(或异常)的订单, 不能自动处理, 跳过此订单! ")
+                                self.logger.warning(
+                                    "This order requires manual delivery (or is abnormal). Cannot auto-process. Skipping."
+                                )
                             elif item["offer_id"] in ignored_offer and ignored_offer[item["offer_id"]] <= 10:
-                                self.logger.info("此交易报价已经被Steamauto处理过, 出现此提示的原因是悠悠系统延迟或者该订单为批量购买订单.这不是一个报错!")
+                                self.logger.info(
+                                    "This trade offer was already handled by Steamauto. "
+                                    "Likely due to UU system delay or a bulk purchase. This is not an error."
+                                )
                                 ignored_offer[item["offer_id"]] += 1
                             else:
-                                if accept_trade_offer(self.steam_client, self.steam_client_mutex, str(item["offer_id"]), desc=f"发货平台：悠悠有品\n发货饰品：{item['item_name']}"):
+                                if accept_trade_offer(
+                                    self.steam_client,
+                                    self.steam_client_mutex,
+                                    str(item["offer_id"]),
+                                    desc=f"Platform: UUYoupin\nItem: {item['item_name']}"
+                                ):
                                     ignored_offer[str(item["offer_id"])] = 1
-                                    self.logger.info(f'接受报价[{str(item["offer_id"])}]完成!')
+                                    self.logger.info(f"Offer [{str(item['offer_id'])}] accepted.")
                                     accepted = True
                             if (uu_wait_deliver_list.index(item) != len_uu_wait_deliver_list - 1) and accepted:
-                                self.logger.info("为了避免频繁访问Steam接口, 等待5秒后继续...")
+                                self.logger.info("Waiting 5 seconds to avoid frequent Steam API calls...")
                                 time.sleep(5)
                 except Exception as e:
-                    if '登录状态失效，请重新登录' in str(e):
+                    if '登录状态失效，请重新登录' in str(e):  # keep original substring match from upstream
                         handle_caught_exception(e, "UUAutoAcceptOffer", known=True)
-                        send_notification('检测到悠悠有品登录已经失效,请重新登录', title='悠悠有品登录失效')
-                        self.logger.error("检测到悠悠有品登录已经失效,请重新登录")
-                        self.logger.error("由于登录失败，插件将自动退出")
+                        send_notification('UUYoupin login expired. Please log in again', title='UUYoupin login expired')
+                        self.logger.error("Detected UUYoupin login expiration. Please log in again.")
+                        self.logger.error("Login failed. Plugin will exit.")
                         exit_code.set(1)
                         return 1
                     else:
                         handle_caught_exception(e, "UUAutoAcceptOffer", known=False)
-                        self.logger.error("出现未知错误, 稍后再试! ")
-                self.logger.info("将在{0}秒后再次检查待发货订单信息!".format(str(interval)))
+                        self.logger.error("Unknown error. Try again later.")
+                self.logger.info("Rechecking pending deliveries in {0} seconds.".format(str(interval)))
                 time.sleep(interval)

@@ -3,164 +3,156 @@
 ![Steamauto](https://socialify.git.ci/Steamauto/Steamauto/image?description=1&language=1&name=1&owner=1&theme=Light)
 
 <div align="center">
-      <a href="http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=TMyvQMePF7GeJxz27fLzKHuhC2iAN6Bj&authKey=VAgXngXUeaHBfGwY2uNzE%2F8C7S5FN6HsRJDm8LREGeLObTRLSHoYsWxLHPcI9Llz&noverify=0&group_code=425721057" alt="QQ Group">
-        <img src="https://img.shields.io/badge/%E5%AE%98%E6%96%B9QQ%E7%BE%A4-425721057-brightgreen?logo=TencentQQ&link=http%3A%2F%2Fqm.qq.com%2Fcgi-bin%2Fqm%2Fqr%3F_wv%3D1027%26k%3DTMyvQMePF7GeJxz27fLzKHuhC2iAN6Bj%26authKey%3DVAgXngXUeaHBfGwY2uNzE%252F8C7S5FN6HsRJDm8LREGeLObTRLSHoYsWxLHPcI9Llz%26noverify%3D0%26group_code%3D425721057" /></a>
-      <a href="https://www.bilibili.com/video/BV1ph4y1y7mz/" alt="Video tutorial">
-        <img src="https://img.shields.io/badge/%E8%A7%86%E9%A2%91%E6%95%99%E7%A8%8B-%E7%82%B9%E5%87%BB%E8%A7%82%E7%9C%8B-brightgreen?logo=bilibili" /></a>
       <a href="https://github.com/Steamauto/Steamauto/stargazers" alt="GitHub Repo stars">
         <img src="https://img.shields.io/github/stars/Steamauto/Steamauto?logo=github" /></a>
       <a href="https://github.com/Steamauto/Steamauto/forks" alt="GitHub forks">
         <img src="https://img.shields.io/github/forks/Steamauto/Steamauto?logo=github" /></a>
 </div>
 
-> 开源的 Steam 自动收发货解决方案
-> 杜绝收费、安全稳定
+> Open source Steam auto-shipment solution
+> No fees, secure and stable
 
-**使用前请仔细阅读本文档！**
-**欢迎有能力者提交PR来完善本程序。**
-**请勿违反开源协议，包括但不限于闭源倒卖此程序或修改后不进行开源等。**
-**[欢迎加入Steamauto 官方QQ群:425721057](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=TMyvQMePF7GeJxz27fLzKHuhC2iAN6Bj&authKey=VAgXngXUeaHBfGwY2uNzE%2F8C7S5FN6HsRJDm8LREGeLObTRLSHoYsWxLHPcI9Llz&noverify=0&group_code=425721057)**
-**网络不好的可以加QQ群在群文件内下载最新构建**
+**Please read this documentation carefully before use!**
+**Contributors are welcome to submit PRs to improve this program.**
+**Please do not violate the open source license, including but not limited to closed-source resale of this program or modifications without open sourcing.**
 
-## 它能做什么？
+## What can it do?
 
-#### 在 [Buff饰品交易平台](https://buff.163.com) 上:
+#### On [Buff Item Trading Platform](https://buff.163.com):
 
-- 自动发货
-- 自动求购收货(需要开启 自动接受礼物报价 功能)
-- 供应求购确认报价
-- 以最低价上架全部库存
-  - 支持自动上架描述
-  - 支持自动上架时间段黑白名单
-  - **支持选择塞给求购订单, 利益最大化**
+- Auto-shipment
+- Auto-accept buy orders (requires enabling auto-accept gift offers)
+- Supply buy order confirmations
+- List all inventory at lowest price
+  - Supports auto-listing descriptions
+  - Supports auto-listing time period blacklist/whitelist
+  - **Supports choosing to supply buy orders for maximum profit**
 
-#### 在 [悠悠有品饰品交易平台](https://www.youpin898.com/) 上:
+#### On [UU Youpin Item Trading Platform](https://www.youpin898.com/):
 
-- 自动发货出售商品
-- 出租/出售自动上架
-  - 出租支持:
-    - [x] 自动设置出租价格
-    - [x] 按出售现价固定比例设置出租价格
-  - 出售支持:
-    - [ ] 按磨损区间定价
-    - [X] 按止盈率定价（需要设定购入价）
+- Auto-shipment for sale items
+- Auto-listing for rental/sale
+  - Rental supports:
+    - [x] Auto-set rental prices
+    - [x] Set rental prices by fixed ratio of current sale price
+  - Sale supports:
+    - [ ] Price by wear range
+    - [X] Price by profit rate (requires setting purchase price)
 
-#### 在 [ECOSteam交易平台](https://www.ecosteam.cn/) 上:
+#### On [ECOSteam Trading Platform](https://www.ecosteam.cn/):
 
-- 自动发货
-- 与BUFF、悠悠有品所上架商品同步 (支持比例)
+- Auto-shipment
+- Sync listed items with BUFF and UU Youpin (supports ratios)
 
-#### 在 [C5Game](https://www.c5game.com/) 上:
-- 自动发货
+#### On [C5Game](https://www.c5game.com/):
+- Auto-shipment
 
-#### 在 Steam 上:
+#### On Steam:
 
-- 内置Steam加速器
-- 自动接受礼物报价(无需支出任何Steam库存中的物品的报价)
+- Built-in Steam accelerator
+- Auto-accept gift offers (offers that don't require spending any items from Steam inventory)
 
-## 如何使用?
+## How to use?
 
-0. ~~给予本仓库一个star(手动狗头)~~  
-1. 前往 [Github Releases](https://github.com/Steamauto/Steamauto/releases/latest) 下载适合自己系统的Steamauto
-2. 运行一次程序，程序会释放配置文件
-3. 编辑 `config`文件夹下的 `config.json5`(文件中有相关配置辅助配置)，启用你需要的功能
-4. 修改 `config`文件夹下的 `steam_account_info.json5`中所有的参数(相关教程见附录)
-5. 根据你需要程序为你自动化的平台，根据下面的表格配置相关信息
+0. ~~Give this repository a star~~  
+1. Go to [Github Releases](https://github.com/Steamauto/Steamauto/releases/latest) to download Steamauto suitable for your system
+2. Run the program once, it will release configuration files
+3. Edit `config.json5` in the `config` folder (file contains configuration assistance), enable the features you need
+4. Modify all parameters in `steam_account_info.json5` in the `config` folder (related tutorials in appendix)
+5. Configure relevant information according to the table below based on the platforms you need the program to automate
 
-| 平台|配置详情|
+| Platform | Configuration Details |
 | --------------------------------|--------------------------------------------------------------------|
-| 网易BUFF/悠悠有品| 无需手动配置登录信息，在`config.json5`启用后根据程序提示登录即可|
-| ECOSteam|需要在`config.json5`中配置partnerId 且需要在config文件夹下创建rsakey.txt填入私钥(教程下文有相关说明) |
-| C5Game|需要申请API Key并在`config.json5`中配置|
+| NetEase BUFF/UU Youpin | No manual login configuration needed, enable in `config.json5` and follow program prompts to login |
+| ECOSteam | Need to configure partnerId in `config.json5` and create rsakey.txt in config folder with private key (tutorial below) |
+| C5Game | Need to apply for API Key and configure in `config.json5` |
 
-## `notification`相关配置项说明(仅支持BUFF相关插件)
+## `notification` related configuration items (only supports BUFF related plugins)
 
-| 配置项                           | 描述                                                                                                                                                      |
+| Configuration Item | Description |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| sell_notification                | 出售通知(如不需要可直接删除)                                                                                                                              |
-| protection_notification          | 出售保护通知(如不需要可直接删除)                                                                                                                          |
-| item_mismatch_notification       | 报价与BUFF出售商品不匹配通知配置(如不需要可直接删除)                                                                                                      |
-| buff_cookie_expired_notification | BUFF Cookies失效通知(如不需要可直接删除)                                                                                                                  |
-| ---                              | ---                                                                                                                                                       |
-| title                            | 通知标题                                                                                                                                                  |
-| body                             | 通知内容                                                                                                                                                  |
-| servers                          | Apprise格式服务器列表 - 详见[Apprise](https://github.com/caronc/apprise)`<br>`- 额外支持 [pushplus](https://www.pushplus.plus/) 格式为 `pushplus://<token>` |
+| sell_notification | Sale notification (can be deleted if not needed) |
+| protection_notification | Sale protection notification (can be deleted if not needed) |
+| item_mismatch_notification | Offer mismatch with BUFF sale item notification (can be deleted if not needed) |
+| buff_cookie_expired_notification | BUFF Cookies expiration notification (can be deleted if not needed) |
+| --- | --- |
+| title | Notification title |
+| body | Notification content |
+| servers | Apprise format server list - see [Apprise](https://github.com/caronc/apprise) for details<br>- Additional support for [pushplus](https://www.pushplus.plus/) format as `pushplus://<token>` |
 
 ## FAQ
 
-##### 账号安全问题?
+##### Account security issues?
 
-Steamauto的所有源代码均开放在GitHub，可供所有人自行查看代码安全性
-在用户的电脑不被恶意软件入侵的情况下，账号不可能泄露
+All Steamauto source code is open on GitHub for everyone to review code security
+Under the condition that the user's computer is not invaded by malicious software, account information cannot be leaked
 
-##### SDA报错 `未将对象引用设置到对象的实例`?
+##### SDA error `Object reference not set to an instance of an object`?
 
-![报错如图](https://github.com/Steamauto/Steamauto/assets/51043917/b1282372-11f6-4649-be5f-7bc52faf4c16)
-请先移除手机令牌再使用SDA
+![Error as shown](https://github.com/Steamauto/Steamauto/assets/51043917/b1282372-11f6-4649-be5f-7bc52faf4c16)
+Please remove mobile authenticator first before using SDA
 
-##### 为什么我打开配置文件后，编辑器提示该文件有语法错误？
+##### Why does my editor show syntax errors when I open the configuration file?
 
-本程序使用的配置文件类型为json5，因此在不受支持编辑器中会提示语法错误，但实际上并不影响程序的运行
+This program uses json5 configuration files, so unsupported editors will show syntax errors, but this doesn't actually affect program operation
 
-##### 能否处理卖家发起报价的情况？
+##### Can it handle seller-initiated offers?
 
-不支持，但是有以下解决方案。
-在BUFF上，你可以打开[BUFF网页版的个人设置页面](https://buff.163.com/user-center/profile)，并勾上偏好设置中的 `出售限定买家先发报价`
-在悠悠有品上，暂无解决方案，你需要手动处理
+Not supported, but there are the following solutions.
+On BUFF, you can open [BUFF web version personal settings page](https://buff.163.com/user-center/profile) and check `Sell limited to buyer-initiated offers` in preference settings
+On UU Youpin, there's no solution yet, you need to handle manually
 
-##### 如何获取悠悠有品token?
+##### How to get UU Youpin token?
 
-在最新版本中直接运行程序，若token无效程序会自动引导你获取有效的token
+In the latest version, just run the program directly. If the token is invalid, the program will automatically guide you to get a valid token
 
-##### 是否支持多开？
+##### Does it support multiple instances?
 
-支持。但是需要复制多份程序，分别在不同的文件夹内运行
+Yes. But you need to copy multiple program instances and run them in different folders
 
-##### 可否关闭Buff自动发货？
+##### Can I disable Buff auto-shipment?
 
-将 `config.json`中 `buff_auto_accept_offer.enable`设置为false即可
+Set `buff_auto_accept_offer.enable` to false in `config.json`
 
-##### 使用 `proxies`配置运行源码时出现代理错误但本地代理没问题
+##### Proxy error when running source code with `proxies` configuration but local proxy works fine
 
-该错误在特定 `urllib`下会出现，安装特定版本可以解决
+This error occurs with specific `urllib` versions, installing a specific version can solve it
 
 ```
 pip install urllib3==1.25.11
 ```
 
-`steampy/client.py` 44-48行注释掉的代码解除注释后若出现报错则说明是此问题
+If errors occur after uncommenting lines 44-48 in `steampy/client.py`, it indicates this issue
 
-## 附录
+## Appendix
 
-### 获取 Steam 账户信息
+### Getting Steam Account Information
 
-关于 `steam_account_info.json`相关参数的获取教程都在下面, 请自行参阅
-个人推荐使用[ SteamDesktopAuthenticator(简称SDA) ](https://github.com/Jessecar96/SteamDesktopAuthenticator)获取Steam令牌参数 操作简便(请勿使用1.0.13版本,存在无法获取的问题)
-[官方视频教程](https://www.bilibili.com/video/BV1ph4y1y7mz/)
-[已Root安卓手机获取新版Steam手机令牌教程](https://github.com/BeyondDimension/SteamTools/issues/2598)
+Tutorials for obtaining `steam_account_info.json` related parameters are below, please refer to them
+Personally recommend using [SteamDesktopAuthenticator (SDA)](https://github.com/Jessecar96/SteamDesktopAuthenticator) to get Steam token parameters - simple operation (do not use version 1.0.13, has issues with obtaining)
+[Official video tutorial](https://www.bilibili.com/video/BV1ph4y1y7mz/)
+[Rooted Android phone getting new Steam mobile authenticator tutorial](https://github.com/BeyondDimension/SteamTools/issues/2598)
 
-### 如何注册 ECOSteam 开放平台 - 节选自[ECOSteam官方文档](https://docs.qq.com/aio/DRnR2U05aeG5MT0RS?p=tOOCPKrP8CUmptM7fhIq7p)
+### How to register ECOSteam Open Platform - Excerpt from [ECOSteam Official Documentation](https://docs.qq.com/aio/DRnR2U05aeG5MT0RS?p=tOOCPKrP8CUmptM7fhIq7p)
 
-1. 申请接入流程
-   1. 注册并登录ECO App：
-   2. 进入【我的】，点击右上角设置；
-   3. 点击【账号与安全】进入；
-   4. 点击【开放能力申请】进入介绍页面；
-   5. 点击申请入驻；
-   6. 填写申请资料并提交，回调地址和回调开关配置审核通过后可修改；  // 备注: 此处如需上传身份证正反面照片, 可随意上传图片, 不会进行审核
-   7. 等待审核；  // 备注: 实际上是自动审核, 申请后立刻可用
-2. 审核通过后流程
-   1. 审核通过的用户，可回到页面点击【查看身份ID】；
-   2. 输入RSA公钥后，获取身份ID；  // 备注: RSA私钥在插件运行后需要填写进在config目录下的rsakey.txt中, 请自行生成RSA密钥对, 建议使用2048位或4096位密钥, 如果你不会生成且不想学习, 可以使用在线生成工具生成, 例如[https://rsagen.pages.dev/) (若使用此网站, 请设置强度: 2048或4096, 请自行确保浏览器安全)
-      ~~只使用**不带换行格式**的密钥内容部分。~~ ECOSteam已经支持完整格式的密钥内容部分
-   3. 如开启回调通知，则需配置回调地址和获取ECO的回调公钥；
+1. Application process
+   1. Register and login to ECO App:
+   2. Go to [My], click settings in top right;
+   3. Click [Account & Security] to enter;
+   4. Click [Open Capability Application] to enter introduction page;
+   5. Click apply to join;
+   6. Fill in application materials and submit, callback address and callback switch configuration can be modified after approval;  // Note: If ID card front/back photos need to be uploaded here, you can upload any images, they won't be reviewed
+   7. Wait for approval;  // Note: Actually auto-approved, available immediately after application
+2. Post-approval process
+   1. Approved users can return to the page and click [View Identity ID];
+   2. Enter RSA public key to get identity ID;  // Note: RSA private key needs to be filled into rsakey.txt in config directory after plugin runs, please generate RSA key pair yourself, recommend using 2048 or 4096 bit keys, if you don't know how to generate and don't want to learn, you can use online generation tools, for example [https://rsagen.pages.dev/) (if using this site, set strength: 2048 or 4096, please ensure browser security yourself)
+      ~~Only use the **non-newline format** key content part.~~ ECOSteam now supports complete format key content parts
+   3. If callback notifications are enabled, configure callback address and get ECO's callback public key;
 
-## 鸣谢
+## Acknowledgments
 
-感谢 [**@lupohan44**](https://github.com/lupohan44) 为本项目提交的大量代码！
+Thanks to [**@lupohan44**](https://github.com/lupohan44) for submitting a large amount of code to this project!
 
-感谢 devgod, 14m0k(QQ群用户) 在开发供应求购订单功能时的巨大帮助！
+Thanks to devgod, 14m0k (QQ group users) for their tremendous help in developing the buy order supply functionality!
 
-感谢 [1Password](https://1password.com/) 为开源项目提供免费的 [1Password](https://1password.com/) 团队账户的授权
-
-感谢 [ZMTO](https://console.zmto.com/?affid=1578) 提供的支持！
+Thanks to [1Password](https://1password.com/) for providing free [1Password](https://1password.com/) team account authorization for open source projects

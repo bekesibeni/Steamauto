@@ -1,4 +1,3 @@
-import copy
 import decimal
 import json
 import time
@@ -89,7 +88,7 @@ class SteamClient:
 
     def _get_auth_info(self) -> dict:
         """
-        统一生成当前认证信息:
+        Build current authentication info:
         {
             steamid: str | None,
             access_token: str | None,
@@ -123,25 +122,25 @@ class SteamClient:
 
     def set_and_verify_access_token(self, steamid: str, access_token: str, steam_guard) -> bool:
         """
-        使用已缓存的 access_token 直接恢复会话。
-        注意: 这种方式不包含 sessionid 等附加 cookie, 需要通过访问页面补齐。
+        Restore the session using a cached access_token.
+        Note: This does not include sessionid and other extra cookies. Visit a page to populate them.
         """
         try:
             self.steamid = steamid
             self.steam_guard = guard.load_steam_guard(steam_guard)
             steam_login_secure = f"{steamid}%7C%7C{access_token}"
-            # 设置到两个域
+            # Set on both domains
             self._session.cookies.set('steamLoginSecure', steam_login_secure, domain='steamcommunity.com')
             self._session.cookies.set('steamLoginSecure', steam_login_secure, domain='steampowered.com')
-            # 访问页面以建立 sessionid cookie
+            # Visit a page to establish the sessionid cookie
             self._session.get(SteamUrl.COMMUNITY_URL + '/my', timeout=15)
             if self.is_access_token_valid():
                 self.was_login_executed = True
-                # 如果没有 sessionid 可能后续需要
+                # If sessionid is missing it may be needed later
                 if 'sessionid' not in self._session.cookies.get_dict('steamcommunity.com'):
-                    # 再访问一次确保 sessionid
+                    # Visit again to ensure sessionid
                     self._session.get(SteamUrl.COMMUNITY_URL, timeout=15)
-                # 设置市场登录执行状态（需要 sessionid 与 guard）
+                # Initialize market login state (requires sessionid and guard)
                 try:
                     self.market._set_login_executed(self.steam_guard, self._get_session_id())
                 except Exception:
@@ -160,7 +159,7 @@ class SteamClient:
         func_2fa_input: callable = None,
     ):
         guard.try_to_get_time_delta_from_steam(self._session)
-        self.steam_guard = guard.load_steam_guard(steam_guard)  # self.steam_guard是Dict类型
+        self.steam_guard = guard.load_steam_guard(steam_guard)  # self.steam_guard is Dict type
         self.username = username
         self._password = password
         LoginExecutor(
@@ -172,31 +171,31 @@ class SteamClient:
             func_2fa_input,
         ).login()
         self.was_login_executed = True
-        # 取得 steamid
+        # Get steamid
         self.steamid = self.get_steam64id_from_cookies()
-        # 解析 refresh token
+        # Parse refresh token
         rt_cookie = self._session.cookies.get_dict().get('steamRefresh_steam')
         if rt_cookie and '%7C%7C' in rt_cookie:
             self.refreshToken = rt_cookie.split('%7C%7C')[1]
         else:
             self.refreshToken = None
-        # 主动生成新的 access_token 并写入 cookie
+        # Proactively generate a new access_token and write it to the cookie
         try:
             self.update_access_token()
         except Exception:
             pass
-        # 市场初始化
+        # Initialize market
         try:
             self.market._set_login_executed(self.steam_guard, self._get_session_id())
         except Exception:
             pass
-        # 返回统一认证信息
+        # Return unified auth info
         return self._get_auth_info()
 
     def loginByRefreshToken(self, refresh_token: str, steamid: str, steam_guard):
         """
-        使用 refresh_token 刷新 access_token.
-        返回 auth_info dict 或 None
+        Use refresh_token to refresh access_token.
+        Return auth_info dict or None.
         """
         self.steamid = steamid
         self.refreshToken = refresh_token
@@ -213,7 +212,7 @@ class SteamClient:
         self._session.cookies.set('steamLoginSecure', steam_login_secure, domain='steampowered.com')
         self._session.cookies.set('steamRefresh_steam', f"{steamid}%7C%7C{refresh_token}", domain='steamcommunity.com')
         self.was_login_executed = True
-        # 访问页面建立会话
+        # Visit page to establish the session
         self._session.get(SteamUrl.COMMUNITY_URL + '/my')
         try:
             self.market._set_login_executed(self.steam_guard, self._get_session_id())
@@ -226,14 +225,14 @@ class SteamClient:
     @login_required
     def relogin(self):
         """
-        重新使用账密登录，并返回新的 auth_info
+        Log in again with username and password, and return new auth_info.
         """
         self._session.cookies.clear()
         return self.login(self.username, self._password, self.steam_guard)
 
     def update_access_token(self):
         """
-        利用 refresh_token 刷新 access_token (不返回值, 失败静默)
+        Refresh access_token using refresh_token. No return value. Fail silently.
         """
         try:
             refresh_token = self.refreshToken
@@ -534,7 +533,7 @@ class SteamClient:
         start_after_tradeid=None,
         get_descriptions=True,
         navigating_back=True,
-        include_failed=True,
+        including_failed=True,
         include_total=True,
     ) -> dict:
         params = {
@@ -544,7 +543,7 @@ class SteamClient:
             'start_after_tradeid': start_after_tradeid,
             'get_descriptions': get_descriptions,
             'navigating_back': navigating_back,
-            'include_failed': include_failed,
+            'include_failed': including_failed,
             'include_total': include_total,
         }
         response = self.api_call('GET', 'IEconService', 'GetTradeHistory', 'v1', params).json()

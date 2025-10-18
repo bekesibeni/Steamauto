@@ -6,9 +6,9 @@ from utils.models import Asset, LeaseAsset
 
 
 class ECORentAsset(BaseModel):
-    '''
-    StockId和AssetId二选一
-    '''
+    """
+    Choose either StockId or AssetId.
+    """
     SteamGameId: str = '730'
     StockId: Union[str, None] = None
     AssetId: Union[str, None] = None
@@ -32,7 +32,7 @@ class ECORentAsset(BaseModel):
 
 
 class GoodsNum(BaseModel):
-    # GoodsNum和AssetId二选一
+    # Choose either GoodsNum or AssetId.
     GoodsNum: Union[str, None] = None
     AssetId: Union[str, None] = None
     SteamGameId: str = '730'

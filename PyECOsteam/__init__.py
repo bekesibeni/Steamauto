@@ -15,7 +15,7 @@ from utils.tools import jobHandler
 
 
 class ECOsteamClient:
-    # https://openapi.ecosteam.cn/index.html/ 查看API文档
+    # See API docs: https://openapi.ecosteam.cn/index.html/
     def __rps_counter(self):
         try:
             self.rps = 0
@@ -57,7 +57,7 @@ class ECOsteamClient:
                     api == '/Api/Selling/OffshelfGoods'
                     and resp.text == '{"ResultCode":"1","ResultMsg":"操作失败","ResultData":false}'
                 ):
-                    self.logger.warning(f"下架操作出现异常,可能是因为商品已经下架,一般不影响程序运行,请忽略")
+                    self.logger.warning("Off-shelf operation returned an error. Item may already be off shelf. Usually harmless. Ignore.")
                 else:
                     raise Exception(f"{resp.text}")
         return resp
@@ -134,7 +134,7 @@ class ECOsteamClient:
                 if good['IsSuccess']:
                     success_count += 1
                 else:
-                    self.logger.error('下架在售商品时出现异常！错误信息：' + good['ErrorMsg'])
+                    self.logger.error('Error while taking item off shelf. Message: ' + good['ErrorMsg'])
         failure_count = len(goodsNumList) - success_count
         return success_count, failure_count
 
@@ -167,7 +167,7 @@ class ECOsteamClient:
             elif res["ResultData"]["PageResult"] == []:
                 break
             else:
-                self.logger.debug(f'已经进行到第{index}次遍历,本次遍历获取到的库存数量为{len(res["ResultData"]["PageResult"])}')
+                self.logger.debug(f'Iteration {index}, fetched {len(res["ResultData"]["PageResult"])} inventory items this page')
                 index += 1
                 for item in res["ResultData"]["PageResult"]:
                     if item["AssetId"] in assetId:
@@ -232,35 +232,35 @@ class ECOsteamClient:
 
     def PublishRentAndSaleGoods(self, steamid, publishType, sell_assets: list[Asset] = [], lease_assets: list[LeaseAsset] = []):
         """
-        :param publishType: 1-发布上架 2-改价上架
-        请求示例：{
-        "SteamId": "",
-        "PublishType": {},
-        "Assets": [
+        :param publishType: 1 - publish/list; 2 - change price
+        Request example:
+        {
+          "SteamId": "",
+          "PublishType": {},
+          "Assets": [
             {
-            "AssetId": "",
-            "SteamGameId": "",
-            "TradeTypes": [
-            ],
-            "SellPrice": 0,
-            "SellDescription": "",
-            "RentMaxDay": 0,
-            "RentPrice": 0,
-            "LongRentPrice": 0,
-            "RentDeposits": 0,
-            "RentDescription": ""
+              "AssetId": "",
+              "SteamGameId": "",
+              "TradeTypes": [],
+              "SellPrice": 0,
+              "SellDescription": "",
+              "RentMaxDay": 0,
+              "RentPrice": 0,
+              "LongRentPrice": 0,
+              "RentDeposits": 0,
+              "RentDescription": ""
             }
-        ],
-        "PartnerId": "",
-        "Timestamp": "",
-        "Sign": ""
+          ],
+          "PartnerId": "",
+          "Timestamp": "",
+          "Sign": ""
         }
         """
         assets = []
         sell_assets_dict = dict({asset.assetid: asset for asset in sell_assets})
         lease_assets_dict = dict({asset.assetid: asset for asset in lease_assets})
         sell_lease_assets_id = set(sell_assets_dict.keys()) & set(lease_assets_dict.keys())
-        # 若传入两个可选参数，则去重并合并
+        # If both optional lists are provided, deduplicate and merge
         for asset_id in sell_lease_assets_id:
             rsp_asset = {
                 "AssetId": asset_id,
@@ -292,19 +292,20 @@ class ECOsteamClient:
             ).json()
             for rsp_asset in rsp['ResultData']:
                 if not rsp_asset['IsSuccess']:
+                    # The API returns Chinese strings like "已上架" for "already listed". Keep the literal check.
                     if '已上架' in rsp_asset['ErrorMsg'] and publishType == 1:
                         self.logger.warning(
-                            f"资产编号: {rsp_asset['AssetId']} 可能已经在租赁/出售货架上架(通常为可租可售商品需要以此方式上架) 稍后通过改价方式上架"
+                            f"AssetId: {rsp_asset['AssetId']} may already be listed for rent/sale (typical for dual trade types). Will re-list via price-change."
                         )
                         for asset in assets:
                             if asset['AssetId'] == rsp_asset['AssetId']:
                                 change_reonshelf_list.append(asset)
                     else:
-                        self.logger.error(f"有商品上架失败！资产编号: {rsp_asset['AssetId']} 错误信息:{rsp_asset['ErrorMsg']}")
+                        self.logger.error(f"Listing failed for some items. AssetId: {rsp_asset['AssetId']} Error: {rsp_asset['ErrorMsg']}")
                 else:
                     success_count += 1
         if change_reonshelf_list:
-            self.logger.info(f"即将通过改价方式上架{len(change_reonshelf_list)}个商品")
+            self.logger.info(f"Will list {len(change_reonshelf_list)} item(s) via price-change flow")
             sell_shelf = self.getFullSellGoodsList(steamid)
             lease_shelf = self.getFulRentGoodsList(steamid)
             for asset in change_reonshelf_list:
@@ -330,7 +331,7 @@ class ECOsteamClient:
                 ).json()
                 for rsp_asset in rsp['ResultData']:
                     if not rsp_asset['IsSuccess']:
-                        self.logger.error(f"有商品上架失败！资产编号: {rsp_asset['AssetId']} 错误信息:{rsp_asset['ErrorMsg']}")
+                        self.logger.error(f"Listing failed for some items. AssetId: {rsp_asset['AssetId']} Error: {rsp_asset['ErrorMsg']}")
                     else:
                         success_count += 1
         failure_count = len(assets) - success_count
@@ -338,10 +339,9 @@ class ECOsteamClient:
 
     def SellerSendOffer(self ,OrderNum, GameId=730):
         """
-        卖家订单发送报价
+        Seller sends Steam trade offer for an order.
 
-        :param OrderNum: 订单号
-        :param GameId: 游戏ID,默认为CSGO
-        :return:
+        :param OrderNum: order number
+        :param GameId: game ID, defaults to CS:GO
         """
         return self.post("/Api/open/order/SellerSendOffer", {"OrderNum": OrderNum, "GameId": GameId})
