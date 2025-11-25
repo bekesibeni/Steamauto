@@ -12,6 +12,7 @@ hidden_imports = [
         'utils.buff_helper',
         'utils.uu_helper',
         'utils.ApiCrypt',
+        'utils.BuffApiCrypt',
         'PyC5Game',
         'PyECOsteam',
         'uuyoupinapi',
@@ -28,7 +29,10 @@ hidden_imports = [
         'utils.old_version_patches',
         'utils.build_info',
         'utils.cloud_service',
-        'utils.static'
+        'utils.static',
+        'json5',
+        'numpy',
+        'schedule'
     ]
 # Don't add requirements.txt lines as hidden imports as they are package names, not module names
 

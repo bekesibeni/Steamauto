@@ -271,24 +271,30 @@ def init_plugins_and_start(steam_client, steam_client_mutex):
         for thread in threads:
             thread.daemon = True
             thread.start()
-        for thread in threads:
-            thread.join()
+        # Use timeout-based join to allow Ctrl+C to work
+        while any(thread.is_alive() for thread in threads):
+            if should_exit:
+                break
+            for thread in threads:
+                if thread.is_alive():
+                    thread.join(timeout=0.1)
+                    break
     if exit_code.get() != 0:
         logger.warning("All plugins have exited. This is abnormal. Check your config.")
 
 
 tried_exit = False
+should_exit = False
 
 
 def exit_app(signal_, frame):
-    global tried_exit
+    global tried_exit, should_exit
+    should_exit = True
     if not tried_exit:
         tried_exit = True
         jobHandler.terminate_all()
-        logger.warning("Exiting... If unresponsive, press Ctrl+C again or close the window.")
         os._exit(exit_code.get())
     else:
-        logger.warning("Program force-exited")
         pid = os.getpid()
         os.kill(pid, signal.SIGTERM)
 
@@ -353,5 +359,9 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, exit_app)
     if not os.path.exists(SESSION_FOLDER):
         os.mkdir(SESSION_FOLDER)
-    exit_code.set(main())  # type: ignore
+    try:
+        exit_code.set(main())  # type: ignore
+    except KeyboardInterrupt:
+        should_exit = True
+        jobHandler.terminate_all()
     exit_app(None, None)

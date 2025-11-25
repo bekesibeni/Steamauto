@@ -65,21 +65,38 @@ class BuffAccount:
     
     BASE_URL = "https://buff.163.com"
 
-    def __init__(self, buffcookie, user_agent=get_ua()):
+    def __init__(self, buffcookie, user_agent=None, proxies=None):
+        if not user_agent:
+            user_agent = get_ua()
+        if proxies:
+            logger.info("Detected Buff proxy settings, applying same proxy to Buff...")
         self.session = requests.session()
+        self.session.proxies = proxies
         self.session.headers = {"User-Agent": user_agent}
         headers = copy.deepcopy(self.session.headers)
         headers["Cookie"] = buffcookie
         self.get_notification(headers=headers)
 
     def get(self, url, **kwargs):
-        response = self.session.get(url, **kwargs)
-        logger.debug(f"GET {url} {response.status_code} {json.dumps(response.json(),ensure_ascii=False)}")
+        for i in range(10):
+            response = self.session.get(url, **kwargs)
+            logger.debug(f"GET {url} {response.status_code} {json.dumps(response.json(), ensure_ascii=False)}")
+            if "系统繁忙" in response.text:
+                logger.warning(f"BUFF interface busy, retrying...{i + 1}/10")
+                time.sleep(2)
+            else:
+                break
         return response
 
     def post(self, url, **kwargs):
-        response = self.session.post(url, **kwargs)
-        logger.debug(f"POST {url} {response.status_code} {json.dumps(response.json(),ensure_ascii=False)}")
+        for i in range(5):
+            response = self.session.post(url, **kwargs)
+            logger.debug(f"POST {url} {response.status_code} {json.dumps(response.json(), ensure_ascii=False)}")
+            if "系统繁忙" in response.text:
+                logger.warning(f"BUFF interface busy, retrying...{i + 1}/5")
+                time.sleep(2)
+            else:
+                break
         return response
 
     def get_user_nickname(self) -> str:
@@ -131,6 +148,54 @@ class BuffAccount:
             data = response.json()
             if data["code"] == "OK" and "data" in data:
                 return data["data"]
+        return {}
+
+    def get_sell_order_to_deliver_page(self, game: str) -> str:
+        """Get the to_deliver page HTML to extract order IDs"""
+        # Build cookie string from session cookies
+        cookie_parts = []
+        for cookie in self.session.cookies:
+            cookie_parts.append(f"{cookie.name}={cookie.value}")
+        cookie_string = "; ".join(cookie_parts)
+        
+        headers = {
+            "cookie": cookie_string
+        }
+        
+        url = f"{self.BASE_URL}/market/sell_order/to_deliver?game={game}"
+        response = self.session.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.text
+        return ""
+
+    def get_sell_order_to_deliver_batch(self, game: str, bill_orders: List[str]) -> Dict:
+        """Get batch orders waiting for delivery with HTML data"""
+        params = {
+            "game": game,
+            "bill_orders": ",".join(bill_orders)
+        }
+        # Build cookie string from session cookies (like Node.js does)
+        cookie_parts = []
+        for cookie in self.session.cookies:
+            cookie_parts.append(f"{cookie.name}={cookie.value}")
+        cookie_string = "; ".join(cookie_parts)
+        
+        # Only cookie header needed, just like Node.js
+        headers = {
+            "cookie": cookie_string
+        }
+        
+        # Use session.get directly to avoid JSON parsing in debug log
+        url = f"{self.BASE_URL}/market/sell_order/to_deliver/batch"
+        response = self.session.get(url, params=params, headers=headers)
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                if data.get("code") == "OK" and "data" in data:
+                    return data
+            except:
+                # If JSON parsing fails, return raw text
+                return {"code": "OK", "data": response.text}
         return {}
 
     def get_sell_order_history(self, appid: Union[str, int]) -> List:

@@ -52,7 +52,9 @@ def install_dependencies():
     
     # Install from requirements.txt
     if os.path.exists('requirements.txt'):
-        return run_command('py -m pip install -r requirements.txt', 'Installing requirements')
+        # Use sys.executable to use the same Python that's running this script
+        python_cmd = sys.executable
+        return run_command(f'{python_cmd} -m pip install -r requirements.txt', 'Installing requirements')
     else:
         print("requirements.txt not found!")
         return False
@@ -65,7 +67,9 @@ def build_executable():
     os.environ['MATRIX_OS'] = 'windows' if os.name == 'nt' else 'linux'
     
     # Run PyInstaller with the spec file
-    return run_command('py -m PyInstaller build.spec', 'Building executable with PyInstaller')
+    # Use sys.executable to use the same Python that's running this script
+    python_cmd = sys.executable
+    return run_command(f'{python_cmd} -m PyInstaller build.spec', 'Building executable with PyInstaller')
 
 def main():
     """Main build process"""

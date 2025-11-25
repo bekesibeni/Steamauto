@@ -19,7 +19,7 @@ STEAM_ACCOUNT_INFO_FILE_PATH = os.path.join(CONFIG_FOLDER, "steam_account_info.j
 STEAM_INVENTORY_FILE_PATH = os.path.join(CONFIG_FOLDER, "steam_inventory.json5")
 SESSION_FOLDER = "session"
 os.makedirs(SESSION_FOLDER, exist_ok=True)
-SUPPORT_GAME_TYPES = [{"game": "csgo", "app_id": 730}, {"game": "dota2", "app_id": 570}]
+SUPPORT_GAME_TYPES = [{"game": "csgo", "app_id": 730}]
 UU_ARG_FILE_PATH = "uu.txt"
 ECOSTEAM_RSAKEY_FILE = os.path.join(CONFIG_FOLDER, "rsakey.txt")
 BUILD_INFO = info
@@ -288,6 +288,13 @@ DEFAULT_CONFIG_JSON = r"""
     "enable": false, // Enable
     "interval": 30, // Polling interval seconds
     "app_key": "" // C5Game AppKey. Apply at https://www.c5game.com/user/user/open-api
+  },
+  // Master panel configuration for item tracking
+  "master_panel": {
+    // Master panel API base URL
+    "baseurl": "",
+    // Master panel API key
+    "api_key": ""
   },
   // File log level: "debug"/"info"/"warning"/"error"
   "log_level": "debug",

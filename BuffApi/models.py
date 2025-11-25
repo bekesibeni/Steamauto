@@ -17,12 +17,5 @@ class BuffOnSaleAsset(BaseModel):
     
     @classmethod
     @no_type_check
-    def from_Asset(cls,obj:Asset) -> 'BuffOnSaleAsset':
-        return cls(
-            assetid=obj.assetid,
-            classid=obj.classid,
-            instanceid=obj.instanceid,
-            market_hash_name=obj.market_hash_name,
-            price=obj.price,
-            desc=''
-        )
+    def from_Asset(cls, obj: Asset) -> "BuffOnSaleAsset":
+        return cls(assetid=obj.assetid, classid=obj.classid, instanceid=obj.instanceid, market_hash_name=obj.market_hash_name, price=obj.price, desc="")

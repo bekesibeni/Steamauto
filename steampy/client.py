@@ -1,5 +1,6 @@
 import decimal
 import json
+import re
 import time
 import urllib.parse as urlparse
 from typing import List, Union, Optional
@@ -566,7 +567,7 @@ class SteamClient:
                 "Invalid trade offer state: {} ({})".format(trade_offer_state.name, trade_offer_state.value)
             )
         if trade_offer_state == TradeOfferState.Active:
-            partner = self._fetch_trade_partner_id(trade_offer_id)
+            partner = self._fetch_trade_partner_id(trade_offer_id, trade)
             session_id = self._get_session_id()
             accept_url = SteamUrl.COMMUNITY_URL + '/tradeoffer/' + trade_offer_id + '/accept'
             params = {
@@ -585,7 +586,15 @@ class SteamClient:
         else:
             return self._confirm_transaction(trade_offer_id)
 
-    def _fetch_trade_partner_id(self, trade_offer_id: str) -> str:
+    def _fetch_trade_partner_id(self, trade_offer_id: str, trade_offer_response: dict = None) -> str:
+        # First, try to get partner ID from the trade offer API response
+        if trade_offer_response and 'response' in trade_offer_response:
+            offer = trade_offer_response['response'].get('offer', {})
+            accountid_other = offer.get('accountid_other')
+            if accountid_other:
+                return account_id_to_steam_id(str(accountid_other))
+        
+        # Fall back to HTML scraping
         url = self._get_trade_offer_url(trade_offer_id)
         api_response = self._session.get(url, allow_redirects=False, timeout=15)
         while api_response.status_code == 302:
@@ -593,7 +602,30 @@ class SteamClient:
         offer_response_text = api_response.text
         if "You have logged in from a new device. In order to protect the items" in offer_response_text:
             raise SevenDaysHoldException("Account has logged in a new device and can't trade for 7 days")
-        return text_between(offer_response_text, "var g_ulTradePartnerSteamID = '", "';")
+        
+        # Try the original method
+        try:
+            return text_between(offer_response_text, "var g_ulTradePartnerSteamID = '", "';")
+        except ValueError:
+            # Try alternative patterns
+            # Try regex pattern for g_ulTradePartnerSteamID
+            pattern = r"g_ulTradePartnerSteamID\s*=\s*['\"](\d+)['\"]"
+            match = re.search(pattern, offer_response_text)
+            if match:
+                return match.group(1)
+            
+            # Try to find partner ID in other JavaScript variables
+            pattern = r"partner.*?['\"](\d+)['\"]"
+            match = re.search(pattern, offer_response_text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+            
+            # If all methods fail, raise a more descriptive error
+            raise ApiException(
+                f"Could not extract trade partner ID from trade offer {trade_offer_id}. "
+                f"This may be due to Steam risk control or changes in Steam's page structure. "
+                f"Check IP/accelerator/proxy settings."
+            )
 
     def _confirm_transaction(self, trade_offer_id: str, match_end: bool = False) -> dict:
         confirmation_executor = ConfirmationExecutor(

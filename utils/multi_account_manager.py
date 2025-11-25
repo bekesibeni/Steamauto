@@ -25,6 +25,8 @@ class MultiAccountManager:
         self.account_by_steamid = {}
         self.login_mutex = threading.Lock()
         self.is_initialized = False
+        self.refresh_thread = None
+        self.refresh_thread_stop = threading.Event()
         
     def load_accounts_from_config(self) -> bool:
         """Load account configuration from steam_account_info.json5"""
@@ -39,9 +41,7 @@ class MultiAccountManager:
             handle_caught_exception(e, known=True)
             return False
             
-        # Check if it's the new multi-account format
         if "accounts" in account_config:
-            # New multi-account format
             accounts_list = account_config.get("accounts", [])
             max_accounts = account_config.get("max_accounts", 5)
             
@@ -56,23 +56,20 @@ class MultiAccountManager:
                 self.account_by_steamid[account['steamid']] = account
                 
         else:
-            # Legacy single-account format - convert to multi-account
             logger.info("Detected legacy single-account format. Converting to multi-account format...")
             if not self._validate_legacy_account_config(account_config):
                 return False
                 
-            # Convert to multi-account format
             legacy_account = {
                 "name": "Main Account",
                 "steam_username": account_config.get("steam_username", ""),
                 "steam_password": account_config.get("steam_password", ""),
                 "shared_secret": account_config.get("shared_secret", ""),
                 "identity_secret": account_config.get("identity_secret", ""),
-                "steamid": "",  # Will be filled after login
+                "steamid": "",
                 "enabled": True
             }
             
-            # We'll need to login first to get the steamid
             temp_config = {"use_proxies": self.config.get("use_proxies", False)}
             temp_client = login_to_steam_single_account(legacy_account, temp_config)
             if temp_client:
@@ -140,10 +137,7 @@ class MultiAccountManager:
                     client = login_to_steam_single_account(account, self.config)
                     
                     if client and client.is_session_alive():
-                        # Get the actual Steam ID from the client
                         actual_steamid = client.get_steam64id_from_cookies()
-                        
-                        # Store the client with the actual Steam ID as the key
                         self.steam_clients[actual_steamid] = client
                         success_count += 1
                         logger.info(f"Successfully logged in to {account['name']} (SteamID: {actual_steamid})")
@@ -160,18 +154,62 @@ class MultiAccountManager:
                 
             logger.info(f"Successfully logged in to {success_count}/{len([a for a in self.accounts.values() if a.get('enabled', True)])} accounts")
             self.is_initialized = True
+            self._start_refresh_thread()
+            
             return True
             
     def get_client_for_steamid(self, steamid: str) -> Optional[SteamClient]:
         """Get the SteamClient for the specified steamid"""
         steamid_str = str(steamid)
         
-        # Instead of relying on keys, check all clients and find the one with matching steamid
         for stored_steamid, client in self.steam_clients.items():
-            if client and client.is_session_alive():
-                actual_steamid = client.get_steam64id_from_cookies()
-                if actual_steamid == steamid_str:
-                    return client
+            if client:
+                try:
+                    if client.is_session_alive():
+                        actual_steamid = client.get_steam64id_from_cookies()
+                        if actual_steamid == steamid_str:
+                            return client
+                except Exception:
+                    pass
+        
+        account = self.account_by_steamid.get(steamid_str)
+        if account:
+            stored_client = None
+            for stored_steamid, client in self.steam_clients.items():
+                if client:
+                    try:
+                        actual_steamid = client.get_steam64id_from_cookies()
+                        if actual_steamid == steamid_str:
+                            stored_client = client
+                            break
+                    except Exception:
+                        if stored_steamid == steamid_str:
+                            stored_client = client
+                            break
+            
+            needs_refresh = stored_client is None
+            if stored_client is not None:
+                try:
+                    needs_refresh = not stored_client.is_session_alive()
+                except Exception:
+                    needs_refresh = True
+            
+            if needs_refresh:
+                logger.info(f"Session expired for SteamID {steamid_str} ({account.get('name', 'Unknown')}). Attempting to refresh...")
+                try:
+                    new_client = login_to_steam_single_account(account, self.config)
+                    if new_client and new_client.is_session_alive():
+                        actual_steamid = new_client.get_steam64id_from_cookies()
+                        self.steam_clients[actual_steamid] = new_client
+                        if stored_client is not None and actual_steamid != steamid_str:
+                            self.steam_clients.pop(steamid_str, None)
+                        logger.info(f"Successfully refreshed session for SteamID {actual_steamid} ({account.get('name', 'Unknown')})")
+                        return new_client
+                    else:
+                        logger.error(f"Failed to refresh session for SteamID {steamid_str} ({account.get('name', 'Unknown')})")
+                except Exception as e:
+                    logger.error(f"Error refreshing session for SteamID {steamid_str} ({account.get('name', 'Unknown')}): {str(e)}")
+                    handle_caught_exception(e, known=True)
         
         logger.warning(f"No Steam client found for SteamID: {steamid_str}")
         return None
@@ -191,27 +229,78 @@ class MultiAccountManager:
         
     def refresh_account_sessions(self):
         """Refresh sessions for all accounts that need it"""
-        for steamid, client in self.steam_clients.items():
-            if client and not client.is_session_alive():
-                account = self.account_by_steamid.get(steamid)
-                if account:
-                    logger.info(f"Refreshing session for {account['name']}")
-                    try:
-                        new_client = login_to_steam_single_account(account, self.config)
-                        if new_client and new_client.is_session_alive():
-                            self.steam_clients[steamid] = new_client
-                            logger.info(f"Session refreshed for {account['name']}")
-                    except Exception as e:
-                        logger.error(f"Failed to refresh session for {account['name']}: {str(e)}")
-                        handle_caught_exception(e, known=True)
+        for steamid, client in list(self.steam_clients.items()):
+            if client:
+                try:
+                    if not client.is_session_alive():
+                        account = None
+                        try:
+                            actual_steamid = client.get_steam64id_from_cookies()
+                            account = self.account_by_steamid.get(actual_steamid)
+                        except Exception:
+                            pass
                         
+                        if not account:
+                            account = self.account_by_steamid.get(steamid)
+                        
+                        if account:
+                            logger.info(f"Refreshing session for {account['name']} (SteamID: {steamid})")
+                            try:
+                                new_client = login_to_steam_single_account(account, self.config)
+                                if new_client and new_client.is_session_alive():
+                                    actual_steamid = new_client.get_steam64id_from_cookies()
+                                    self.steam_clients[actual_steamid] = new_client
+                                    if actual_steamid != steamid:
+                                        self.steam_clients.pop(steamid, None)
+                                    logger.info(f"Session refreshed for {account['name']} (SteamID: {actual_steamid})")
+                            except Exception as e:
+                                logger.error(f"Failed to refresh session for {account['name']}: {str(e)}")
+                                handle_caught_exception(e, known=True)
+                except Exception as e:
+                    account = self.account_by_steamid.get(steamid)
+                    if account:
+                        logger.info(f"Error checking session for {account['name']}, attempting refresh...")
+                        try:
+                            new_client = login_to_steam_single_account(account, self.config)
+                            if new_client and new_client.is_session_alive():
+                                actual_steamid = new_client.get_steam64id_from_cookies()
+                                self.steam_clients[actual_steamid] = new_client
+                                if actual_steamid != steamid:
+                                    self.steam_clients.pop(steamid, None)
+                                logger.info(f"Session refreshed for {account['name']} (SteamID: {actual_steamid})")
+                        except Exception as refresh_error:
+                            logger.error(f"Failed to refresh session for {account['name']}: {str(refresh_error)}")
+                            handle_caught_exception(refresh_error, known=True)
+                        
+    def _start_refresh_thread(self):
+        """Start background thread to periodically refresh sessions"""
+        if self.refresh_thread and self.refresh_thread.is_alive():
+            return
+            
+        def refresh_worker():
+            while not self.refresh_thread_stop.wait(1800):
+                try:
+                    logger.debug("Running periodic session refresh check...")
+                    self.refresh_account_sessions()
+                except Exception as e:
+                    logger.error(f"Error in periodic session refresh: {str(e)}")
+                    handle_caught_exception(e, known=True)
+        
+        self.refresh_thread = threading.Thread(target=refresh_worker, daemon=True, name="SessionRefreshThread")
+        self.refresh_thread.start()
+        logger.info("Started background session refresh thread")
+    
     def shutdown(self):
         """Shutdown all Steam clients"""
         logger.info("Shutting down all Steam clients...")
+        
+        if self.refresh_thread and self.refresh_thread.is_alive():
+            self.refresh_thread_stop.set()
+            self.refresh_thread.join(timeout=5)
+        
         for steamid, client in self.steam_clients.items():
             if client:
                 try:
-                    # SteamClient doesn't have explicit logout, just clear references
                     pass
                 except Exception as e:
                     logger.warning(f"Error shutting down client for {steamid}: {str(e)}")
