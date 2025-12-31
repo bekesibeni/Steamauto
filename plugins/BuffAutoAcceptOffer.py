@@ -150,7 +150,10 @@ class BuffAutoAcceptOffer:
         
         try:
             truncated_float = self.truncate_float(float_value, 16)
-            float_str = str(truncated_float)
+            # Ensure float is sent as a string by using format to prevent JSON auto-conversion
+            float_str = f"{truncated_float:.16f}".rstrip('0').rstrip('.')
+            if not float_str or float_str == '.':
+                float_str = "0"
             
             item_data = {
                 "float": float_str,
@@ -462,6 +465,15 @@ class BuffAutoAcceptOffer:
                                         ignored_offer[offer_id] = 1
                                         logger.info("Accepted. Offer added to ignore list.")
                                         
+                                        # Try to get price from order_info if not in float_map
+                                        if not cny_price and offer_id in self.order_info:
+                                            try:
+                                                cny_price = str(self.order_info[offer_id].get("price", ""))
+                                                if cny_price:
+                                                    logger.info(f"Using price from order_info for offer {offer_id}: {cny_price}")
+                                            except Exception as e:
+                                                logger.debug(f"Could not get price from order_info: {str(e)}")
+                                        
                                         if float_value and cny_price and self.api_url and self.api_key:
                                             try:
                                                 platform_price, actual_price = self.calculate_prices(cny_price)
@@ -469,6 +481,14 @@ class BuffAutoAcceptOffer:
                                                     logger.info(f"Successfully sent item {item_name} to master panel")
                                             except Exception as e:
                                                 logger.warning(f"Failed to process prices for master panel: {str(e)}")
+                                        elif self.api_url and self.api_key:
+                                            # Log why item wasn't reported
+                                            missing = []
+                                            if not float_value:
+                                                missing.append("float_value")
+                                            if not cny_price:
+                                                missing.append("cny_price")
+                                            logger.warning(f"Item {item_name} (offer {offer_id}) not reported to master panel: missing {', '.join(missing)}")
                                     else:
                                         ignored_offer[offer_id] = 1
                                         logger.info("Offer processing failed. Added to ignore list to prevent repeated attempts.")

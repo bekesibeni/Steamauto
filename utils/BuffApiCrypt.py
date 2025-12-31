@@ -44,9 +44,3 @@ OSkVea8JGUUD8PliMtRJOQkCAwEAAQ=="""
         encrypted_base64 = base64.b64encode(encrypted_data).decode('utf-8')
 
         return encrypted_base64
-
-
-
-
-
-

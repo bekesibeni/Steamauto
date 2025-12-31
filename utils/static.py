@@ -150,6 +150,10 @@ DEFAULT_CONFIG_JSON = r"""
     // Use wear-range lowest price. If false, use type lowest price.
     // Note: increases requests. Use with caution.
     "use_range_price": false,
+    // Use custom float ranges for synthetic pricing. If true, items matching custom float ranges
+    // (0.00-0.005, 0.04-0.05, 0.05-0.06, 0.07-0.075, 0.11-0.12, 0.12-0.13, 0.15-0.16, 0.27-0.29, 0.29-0.31)
+    // will use those ranges instead of standard wear ranges. Requires use_range_price to be true.
+    "custom_floats": false,
     // Blacklist hours (int). When current hour equals any, do not list.
     "blacklist_time": [],
     // Whitelist hours (int). When current hour not in list, do not list.

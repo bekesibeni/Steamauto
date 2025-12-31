@@ -162,7 +162,7 @@ class BuffAutoOnSale:
             self.logger.error("[BuffAutoOnSale] Failed to fetch BUFF inventory. Check buff_cookies.txt or try later!")
             return {}
 
-    def put_item_on_sale(self, items, price, description="", game="csgo", app_id=730, use_range_price=False):
+    def put_item_on_sale(self, items, price, description="", game="csgo", app_id=730, use_range_price=False, custom_floats=False):
         """
         Put the provided `items` on sale in BUFF at a calculated or explicit price.
 
@@ -181,6 +181,20 @@ class BuffAutoOnSale:
         if game != "csgo" and use_range_price:
             self.logger.warning("[BuffAutoOnSale] Wear-range pricing supported for CSGO only. Auto-disabled.")
             use_range_price = False
+        
+        # Custom float ranges for synthetic pricing
+        custom_float_ranges = [
+            {'min': 0.00, 'max': 0.005},
+            {'min': 0.04, 'max': 0.05},
+            {'min': 0.05, 'max': 0.06},
+            {'min': 0.07, 'max': 0.075},
+            {'min': 0.11, 'max': 0.12},
+            {'min': 0.12, 'max': 0.13},
+            {'min': 0.15, 'max': 0.16},
+            {'min': 0.27, 'max': 0.29},
+            {'min': 0.29, 'max': 0.31}
+        ]
+        
         wear_ranges = [{'min': 0, 'max': 0.01},
                        {'min': 0.01, 'max': 0.02},
                        {'min': 0.02, 'max': 0.03},
@@ -310,12 +324,30 @@ class BuffAutoOnSale:
                         if paint_wear.startswith("Float:"):
                             paint_wear = paint_wear[6:]  # Remove "Float:" prefix
                         paint_wear = float(paint_wear)
-                        for wear_range in wear_ranges:
-                            if wear_range['min'] <= paint_wear < wear_range['max']:
-                                min_paint_wear = wear_range['min']
-                                max_paint_wear = wear_range['max']
-                                done = True
-                                break
+                        
+                        # Check custom float ranges first if enabled
+                        custom_range_matched = False
+                        if custom_floats:
+                            for custom_range in custom_float_ranges:
+                                if custom_range['min'] <= paint_wear < custom_range['max']:
+                                    min_paint_wear = custom_range['min']
+                                    max_paint_wear = custom_range['max']
+                                    custom_range_matched = True
+                                    self.logger.info(
+                                        "[BuffAutoOnSale] Using custom float range: " + str(min_paint_wear) + " - " +
+                                        str(max_paint_wear) + " (float: " + str(paint_wear) + ")")
+                                    done = True
+                                    break
+                        
+                        # If custom range not matched, use original wear_ranges
+                        if not custom_range_matched:
+                            for wear_range in wear_ranges:
+                                if wear_range['min'] <= paint_wear < wear_range['max']:
+                                    min_paint_wear = wear_range['min']
+                                    max_paint_wear = wear_range['max']
+                                    done = True
+                                    break
+                        
                         if not done:
                             self.logger.error("[BuffAutoOnSale] Code error. Unable to parse wear: " + str(paint_wear))
                             self.logger.error("[BuffAutoOnSale] Using type-level lowest price.")
@@ -362,6 +394,12 @@ class BuffAutoOnSale:
                     self.logger.info(
                         "[BuffAutoOnSale] Using wear-range lowest price. Range: " + str(min_paint_wear) + " - " +
                         str(max_paint_wear))
+            
+            # Skip item if use_range_price is enabled but no float value was found
+            if use_range_price and paint_wear == -1:
+                self.logger.info("[BuffAutoOnSale] Item " + item["market_hash_name"] + " has no float value defined. Skipping.")
+                continue
+            
             sell_price = price
             if sell_price == -1:
                 # Use pricing strategy rather than raw lowest price
@@ -746,6 +784,9 @@ class BuffAutoOnSale:
         use_range_price = False
         if 'use_range_price' in self.config["buff_auto_on_sale"]:
             use_range_price = self.config["buff_auto_on_sale"]["use_range_price"]
+        custom_floats = False
+        if 'custom_floats' in self.config["buff_auto_on_sale"]:
+            custom_floats = self.config["buff_auto_on_sale"]["custom_floats"]
         while True:
             try:
                 with self.steam_client_mutex:
@@ -817,7 +858,7 @@ class BuffAutoOnSale:
                                 for items_to_sell in items_to_sell_group:
                                     self.put_item_on_sale(items=items_to_sell, price=-1, description=description,
                                                           game=game["game"], app_id=game["app_id"],
-                                                          use_range_price=use_range_price)
+                                                          use_range_price=use_range_price, custom_floats=custom_floats)
                                     if 'buy_order' in self.config["buff_auto_on_sale"] and \
                                             self.config["buff_auto_on_sale"]["buy_order"]["enable"]:
                                         self.confirm_supply_order()
@@ -864,7 +905,7 @@ class BuffAutoOnSale:
                                 for items_to_sell in items_to_sell_group:
                                     self.put_item_on_sale(items=items_to_sell, price=-1, description=description,
                                                           game=game["game"], app_id=game["app_id"],
-                                                          use_range_price=use_range_price)
+                                                          use_range_price=use_range_price, custom_floats=custom_floats)
                                     if 'buy_order' in self.config["buff_auto_on_sale"] and \
                                             self.config["buff_auto_on_sale"]["buy_order"]["enable"]:
                                         self.confirm_supply_order()
