@@ -7,8 +7,29 @@ import time
 import apprise
 import json5
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from apprise import AppriseAsset
 from bs4 import BeautifulSoup
+
+
+class TimeoutRetryAdapter(HTTPAdapter):
+    """HTTPAdapter with a default timeout and automatic retry on transient errors."""
+    def __init__(self, timeout=30, *args, **kwargs):
+        self.timeout = timeout
+        retry = Retry(
+            total=3,
+            backoff_factor=3,       # waits 0s, 3s, 6s between retries
+            status_forcelist=[502, 503, 504],
+            allowed_methods=None,    # retry on all methods including POST
+        )
+        kwargs["max_retries"] = retry
+        super().__init__(*args, **kwargs)
+
+    def send(self, *args, **kwargs):
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self.timeout
+        return super().send(*args, **kwargs)
 
 from utils.BuffApiCrypt import BuffApiCrypt
 from utils.buff_helper import get_valid_session_for_buff
@@ -20,23 +41,6 @@ from utils.multi_account_manager import (
     initialize_multi_account_manager,
     get_multi_account_manager,
 )
-
-
-def format_str(text: str, trade):
-    for good in trade["goods_infos"]:
-        good_item = trade["goods_infos"][good]
-        created_at_time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(trade["created_at"]))
-        text = text.format(
-            item_name=good_item["name"],
-            steam_price=good_item["steam_price"],
-            steam_price_cny=good_item["steam_price_cny"],
-            buyer_name=trade["bot_name"],
-            buyer_avatar=trade["bot_avatar"],
-            order_time=created_at_time_str,
-            game=good_item["game"],
-            good_icon=good_item["original_icon_url"],
-        )
-    return text
 
 
 def merge_buy_orders(response_data: dict):
@@ -70,6 +74,9 @@ class BuffAutoOnSale:
         self.steam_client_mutex = steam_client_mutex
         self.asset = AppriseAsset()
         self.session = requests.session()
+        adapter = TimeoutRetryAdapter(timeout=30)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
         self.lowest_price_cache = {}
         self.unfinish_supply_order_list = []  # Orders waiting for BUFF to create offers, then confirm; [{order_id, create_time}]
         self._current_steamid = "unknown"
@@ -82,6 +89,10 @@ class BuffAutoOnSale:
         except Exception:
             # Keep default
             pass
+
+        # Rate-limit delay between BUFF API calls to avoid IP ban
+        self.sleep_seconds_to_prevent_buff_ban = self.config.get("buff_auto_on_sale", {}).get(
+            "sleep_seconds_to_prevent_buff_ban", 10)
 
         # Simple pricing strategy: find the first significant price jump and target that tier
         pricing_cfg = self.config.get("buff_auto_on_sale", {}).get("pricing", {})
@@ -121,6 +132,27 @@ class BuffAutoOnSale:
             self._current_steamid = str(self.steam_client.get_steam64id_from_cookies())
         except Exception:
             self._current_steamid = "unknown"
+
+    def _get_csrf_headers(self):
+        """Fetch CSRF token from BUFF and return headers dict for authenticated requests."""
+        self.session.get("https://buff.163.com/api/market/steam_trade", headers=self.buff_headers)
+        csrf_token = self.session.cookies.get("csrf_token", domain='buff.163.com')
+        return {
+            "User-Agent": self.buff_headers["User-Agent"],
+            "X-CSRFToken": csrf_token,
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type": "application/json",
+            "Referer": "https://buff.163.com/market/sell_order/create?game=csgo",
+        }
+
+    def _build_sell_order_url(self, goods_id, game, app_id, min_paint_wear=0, max_paint_wear=1.0):
+        """Build a BUFF sell order listing URL, omitting paint wear params when using full range."""
+        base = ("https://buff.163.com/api/market/goods/sell_order?goods_id=" + str(goods_id)
+                + "&page_num=1&page_size=24&allow_tradable_cooldown=1&sort_by=default&game=" + game
+                + "&appid=" + str(app_id))
+        if min_paint_wear == 0 and max_paint_wear == 1.0:
+            return base
+        return base + "&min_paintwear=" + str(min_paint_wear) + "&max_paintwear=" + str(max_paint_wear)
 
     def init(self) -> bool:
         # Return True to stop if BUFF session is invalid
@@ -220,9 +252,7 @@ class BuffAutoOnSale:
                        {'min': 0.63, 'max': 0.76},
                        {'min': 0.76, 'max': 0.9},
                        {'min': 0.9, 'max': 1}]
-        sleep_seconds_to_prevent_buff_ban = 10
-        if 'sleep_seconds_to_prevent_buff_ban' in self.config["buff_auto_on_sale"]:
-            sleep_seconds_to_prevent_buff_ban = self.config["buff_auto_on_sale"]["sleep_seconds_to_prevent_buff_ban"]
+        sleep_seconds_to_prevent_buff_ban = self.sleep_seconds_to_prevent_buff_ban
         supply_buy_orders = False
         only_auto_accept = True
         supported_payment_method = ["Alipay"]
@@ -244,6 +274,7 @@ class BuffAutoOnSale:
             min_paint_wear = 0
             max_paint_wear = 1.0
             paint_wear = -1
+            skip_item = False
             if use_range_price:
                 done = False
                 while not done:
@@ -275,49 +306,37 @@ class BuffAutoOnSale:
                     }
                     data = {"game": game, "assets": [asset], "steamid": str(self._current_steamid)}
                     # Always fetch wear data - this is needed for price calculations, not a sale action
-                    self.session.get("https://buff.163.com/api/market/steam_trade", headers=self.buff_headers)
-                    csrf_token = self.session.cookies.get("csrf_token", domain='buff.163.com')
-                    headers = {
-                        "User-Agent": self.buff_headers["User-Agent"],
-                        "X-CSRFToken": csrf_token,
-                        "X-Requested-With": "XMLHttpRequest",
-                        "Content-Type": "application/json",
-                        "Referer": "https://buff.163.com/market/sell_order/create?game=csgo",
-                    }
+                    headers = self._get_csrf_headers()
                     preview_url = "https://buff.163.com/market/sell_order/preview/manual_plus"
                     try:
                         resp = self.session.post(preview_url, json=data, headers=headers)
                         resp.raise_for_status()  # Raise an exception for bad status codes
                         response_json = resp.json()
                     except requests.exceptions.JSONDecodeError:
-                        self.logger.error("[BuffAutoOnSale] Failed to get wear range. Using type-level lowest price.")
+                        self.logger.error("[BuffAutoOnSale] Failed to get wear range. Skipping item.")
+                        skip_item = True
                         done = True
                         break
                     except requests.exceptions.RequestException:
-                        self.logger.error("[BuffAutoOnSale] Failed to get wear range. Using type-level lowest price.")
+                        self.logger.error("[BuffAutoOnSale] Failed to get wear range. Skipping item.")
+                        skip_item = True
                         done = True
                         break
                     except Exception:
-                        self.logger.error("[BuffAutoOnSale] Failed to get wear range. Using type-level lowest price.")
+                        self.logger.error("[BuffAutoOnSale] Failed to get wear range. Skipping item.")
+                        skip_item = True
                         done = True
                         break
                     
                     if 'data' not in response_json:
                         self.logger.error(response_json)
-                        self.logger.error("[BuffAutoOnSale] Failed to get wear range. Using type-level lowest price.")
+                        self.logger.error("[BuffAutoOnSale] No data in wear range response. Skipping item.")
+                        skip_item = True
                         done = True
                         break
                     response_data = response_json["data"]
                     bs = BeautifulSoup(response_data, "html.parser")
                     paint_wear_p = bs.find("p", {"class": "paint-wear"})
-                    try:
-                        suggested_price = int(bs.find("span", {"class": "custom-currency"}).attrs.get("data-price"))
-                    except Exception:
-                        suggested_price = -1
-                    if suggested_price != -1 and suggested_price < 10:
-                        self.logger.info("[BuffAutoOnSale] Price below 10. Using type-level lowest price.")
-                        done = True
-                        break
                     if paint_wear_p is not None:
                         paint_wear = paint_wear_p.text.replace("磨损:", "").replace(" ", "").replace("\n", "")
                         # Remove "Float:" prefix if present
@@ -350,7 +369,8 @@ class BuffAutoOnSale:
                         
                         if not done:
                             self.logger.error("[BuffAutoOnSale] Code error. Unable to parse wear: " + str(paint_wear))
-                            self.logger.error("[BuffAutoOnSale] Using type-level lowest price.")
+                            self.logger.error("[BuffAutoOnSale] Skipping item.")
+                            skip_item = True
                             done = True
                             break
                     else:
@@ -365,28 +385,21 @@ class BuffAutoOnSale:
                                 "assetid": item["assetid"],
                                 "contextid": item["contextid"]
                             }
-                            self.session.get("https://buff.163.com/api/market/steam_trade",
-                                             headers=self.buff_headers)
-                            csrf_token = self.session.cookies.get("csrf_token", domain='buff.163.com')
-                            headers = {
-                                "User-Agent": self.buff_headers["User-Agent"],
-                                "X-CSRFToken": csrf_token,
-                                "X-Requested-With": "XMLHttpRequest",
-                                "Content-Type": "application/json",
-                                "Referer": "https://buff.163.com/market/sell_order/create?game=csgo",
-                            }
+                            headers = self._get_csrf_headers()
                             response_json = self.session.post(post_url, json=data, headers=headers).json()
                             if response_json["code"] == "OK":
                                 self.logger.info("[BuffAutoOnSale] Parse request succeeded")
                                 continue
                             else:
                                 self.logger.error(response_json)
-                                self.logger.error("[BuffAutoOnSale] Parse request failed. Using type-level lowest price.")
+                                self.logger.error("[BuffAutoOnSale] Parse request failed. Skipping item.")
+                                skip_item = True
                                 done = True
                         else:
                             refresh_count += 1
                             if refresh_count >= 5:
-                                self.logger.error("[BuffAutoOnSale] Parse failed. Using type-level lowest price.")
+                                self.logger.error("[BuffAutoOnSale] Parse failed after retries. Skipping item.")
+                                skip_item = True
                                 done = True
                                 break
                             self.logger.error("[BuffAutoOnSale] Item not parsed yet...")
@@ -395,6 +408,11 @@ class BuffAutoOnSale:
                         "[BuffAutoOnSale] Using wear-range lowest price. Range: " + str(min_paint_wear) + " - " +
                         str(max_paint_wear))
             
+            # Skip item if wear range fetch failed (don't list at wrong price)
+            if skip_item:
+                self.logger.info("[BuffAutoOnSale] Skipping " + item["market_hash_name"] + " — will retry next cycle.")
+                continue
+
             # Skip item if use_range_price is enabled but no float value was found
             if use_range_price and paint_wear == -1:
                 self.logger.info("[BuffAutoOnSale] Item " + item["market_hash_name"] + " has no float value defined. Skipping.")
@@ -420,7 +438,7 @@ class BuffAutoOnSale:
                                      " will be supplied to the highest buy order " + str(highest_buy_order["price"]))
                     success = self.supply_item_to_buy_order(item, highest_buy_order, game, app_id)
                     if success:
-                        if "on_sale_notification" in self.config["buff_auto_on_sale"]:
+                        if self.config["buff_auto_on_sale"].get("on_sale_notification", {}).get("enable", False):
                             item_list = item["market_hash_name"] + " : " + highest_buy_order["price"] + "\n"
                             apprise_obj = apprise.Apprise(asset=self.asset)
                             for server in self.config["buff_auto_on_sale"]["servers"]:
@@ -461,18 +479,10 @@ class BuffAutoOnSale:
             self.logger.info("[BuffAutoOnSale] [DEBUG] Would POST create listings: " + json5.dumps(data))
             response_json = {"code": "OK", "data": {"debug": True, "assets": assets}}
         else:
-            self.session.get("https://buff.163.com/api/market/steam_trade", headers=self.buff_headers)
-            csrf_token = self.session.cookies.get("csrf_token", domain='buff.163.com')
-            headers = {
-                "User-Agent": self.buff_headers["User-Agent"],
-                "X-CSRFToken": csrf_token,
-                "X-Requested-With": "XMLHttpRequest",
-                "Content-Type": "application/json",
-                "Referer": "https://buff.163.com/market/sell_order/create?game=csgo",
-            }
-        response_json = self.session.post(url, json=data, headers=headers).json()
+            headers = self._get_csrf_headers()
+            response_json = self.session.post(url, json=data, headers=headers).json()
         if response_json["code"] == "OK":
-            if "on_sale_notification" in self.config["buff_auto_on_sale"]:
+            if self.config["buff_auto_on_sale"].get("on_sale_notification", {}).get("enable", False):
                 item_list = ""
                 for asset in assets:
                     item_list += asset["market_hash_name"] + " : " + str(asset["price"]) + "\n"
@@ -500,9 +510,7 @@ class BuffAutoOnSale:
         - Still fetches real market data (this is needed for buy order decisions)
         - Only skips sleep delays in debug mode for faster testing
         """
-        sleep_seconds_to_prevent_buff_ban = 10
-        if 'sleep_seconds_to_prevent_buff_ban' in self.config["buff_auto_on_sale"]:
-            sleep_seconds_to_prevent_buff_ban = self.config["buff_auto_on_sale"]["sleep_seconds_to_prevent_buff_ban"]
+        sleep_seconds_to_prevent_buff_ban = self.sleep_seconds_to_prevent_buff_ban
         if supported_payment_methods is None:
             supported_payment_methods = ["Alipay", "WeChat"]
         # Translate payment method names if needed (original uses Chinese names)
@@ -562,9 +570,7 @@ class BuffAutoOnSale:
         - Still fetches real market data (this is needed for price calculations)
         - Only skips sleep delays in debug mode for faster testing
         """
-        sleep_seconds_to_prevent_buff_ban = 10
-        if 'sleep_seconds_to_prevent_buff_ban' in self.config["buff_auto_on_sale"]:
-            sleep_seconds_to_prevent_buff_ban = self.config["buff_auto_on_sale"]["sleep_seconds_to_prevent_buff_ban"]
+        sleep_seconds_to_prevent_buff_ban = self.sleep_seconds_to_prevent_buff_ban
         goods_key = str(goods_id) + ',' + str(min_paint_wear) + ',' + str(max_paint_wear)
         if goods_key in self.lowest_price_cache:
             if (self.lowest_price_cache[goods_key]["cache_time"] >= datetime.datetime.now() -
@@ -574,36 +580,12 @@ class BuffAutoOnSale:
         self.logger.info("[BuffAutoOnSale] Fetching BUFF lowest sell price")
         self.logger.info("[BuffAutoOnSale] Sleeping " + str(sleep_seconds_to_prevent_buff_ban) + "s to avoid IP ban")
         time.sleep(sleep_seconds_to_prevent_buff_ban)
-        url = (
-                "https://buff.163.com/api/market/goods/sell_order?goods_id="
-                + str(goods_id)
-                + "&page_num=1&page_size=24&allow_tradable_cooldown=1&sort_by=default&game="
-                + game
-                + "&appid="
-                + str(app_id)
-                + "&min_paintwear="
-                + str(min_paint_wear)
-                + "&max_paintwear="
-                + str(max_paint_wear)
-        )
-        if min_paint_wear == 0 and max_paint_wear == 1.0:
-            url = (
-                    "https://buff.163.com/api/market/goods/sell_order?goods_id="
-                    + str(goods_id)
-                    + "&page_num=1&page_size=24&allow_tradable_cooldown=1&sort_by=default&game="
-                    + game
-                    + "&appid="
-                    + str(app_id)
-            )
+        url = self._build_sell_order_url(goods_id, game, app_id, min_paint_wear, max_paint_wear)
         response_json = self.session.get(url, headers=self.buff_headers).json()
         if response_json["code"] == "OK":
             if len(response_json["data"]["items"]) == 0:  # No listings
-                if min_paint_wear != 0 or max_paint_wear != 1.0:
-                    self.logger.info("[BuffAutoOnSale] No items. Retry using type-level lowest price.")
-                    return self.get_lowest_sell_price(goods_id, game, app_id, 0, 1.0)
-                else:
-                    self.logger.info("[BuffAutoOnSale] No items")
-                    return -1
+                self.logger.info("[BuffAutoOnSale] No listings found in this range. Skipping item.")
+                return -1
             
             # Debug: Log first 10 listings for pricing analysis
             if self.debug:
@@ -650,33 +632,11 @@ class BuffAutoOnSale:
         - If no significant gaps found, price 0.01 RMB below the lowest
         """
         # Reuse sell-order endpoint to get current depth
-        sleep_seconds_to_prevent_buff_ban = 10
-        if 'sleep_seconds_to_prevent_buff_ban' in self.config["buff_auto_on_sale"]:
-            sleep_seconds_to_prevent_buff_ban = self.config["buff_auto_on_sale"]["sleep_seconds_to_prevent_buff_ban"]
+        sleep_seconds_to_prevent_buff_ban = self.sleep_seconds_to_prevent_buff_ban
         self.logger.info("[BuffAutoOnSale] Computing listing price using smart tier selection")
         self.logger.info("[BuffAutoOnSale] Sleeping " + str(sleep_seconds_to_prevent_buff_ban) + "s to avoid IP ban")
         time.sleep(sleep_seconds_to_prevent_buff_ban)
-        url = (
-                "https://buff.163.com/api/market/goods/sell_order?goods_id="
-                + str(goods_id)
-                + "&page_num=1&page_size=24&allow_tradable_cooldown=1&sort_by=default&game="
-                + game
-                + "&appid="
-                + str(app_id)
-                + "&min_paintwear="
-                + str(min_paint_wear)
-                + "&max_paintwear="
-                + str(max_paint_wear)
-        )
-        if min_paint_wear == 0 and max_paint_wear == 1.0:
-            url = (
-                    "https://buff.163.com/api/market/goods/sell_order?goods_id="
-                    + str(goods_id)
-                    + "&page_num=1&page_size=24&allow_tradable_cooldown=1&sort_by=default&game="
-                    + game
-                    + "&appid="
-                    + str(app_id)
-            )
+        url = self._build_sell_order_url(goods_id, game, app_id, min_paint_wear, max_paint_wear)
         resp = self.session.get(url, headers=self.buff_headers).json()
         if resp.get("code") != "OK" or "data" not in resp or "items" not in resp["data"] or len(resp["data"]["items"]) == 0:
             self.logger.info("[BuffAutoOnSale] Depth fetch failed, fallback to lowest price")
@@ -750,6 +710,48 @@ class BuffAutoOnSale:
                 self.logger.error("[BuffAutoOnSale] Failed to get client for account: " + account["name"])
         
         return self.steam_client
+
+    def _process_inventory(self, force_refresh, description, use_range_price, custom_floats):
+        """Process inventory for the current account: fetch, de-duplicate, and list items. Returns item count."""
+        account_label = " for account " + str(self._current_steamid)
+        total_items = 0
+        for game in SUPPORT_GAME_TYPES:
+            self.logger.info("[BuffAutoOnSale] Checking " + game["game"] + " inventory" + account_label + "...")
+            inventory_json = self.get_buff_inventory(
+                state="cansell", sort_by="price.desc", game=game["game"], app_id=game["app_id"],
+                force=force_refresh
+            )
+            items = inventory_json.get("items", [])
+            total_items += len(items)
+            if len(items) != 0:
+                self.logger.info(
+                    "[BuffAutoOnSale] Found " + str(len(items)) + " sellable items in " + game["game"] +
+                    " inventory" + account_label + ". Listing..."
+                )
+                # De-duplicate by assetid to avoid processing the same item multiple times
+                seen_assetids = set()
+                items_to_sell = []
+                for item in items:
+                    asset = item["asset_info"]
+                    asset_id = str(asset.get("assetid"))
+                    if asset_id in seen_assetids:
+                        continue
+                    seen_assetids.add(asset_id)
+                    asset["market_hash_name"] = item["market_hash_name"]
+                    items_to_sell.append(asset)
+                # List in groups of 10
+                items_to_sell_group = [items_to_sell[i:i + 10] for i in range(0, len(items_to_sell), 10)]
+                for batch in items_to_sell_group:
+                    self.put_item_on_sale(items=batch, price=-1, description=description,
+                                          game=game["game"], app_id=game["app_id"],
+                                          use_range_price=use_range_price, custom_floats=custom_floats)
+                    if 'buy_order' in self.config["buff_auto_on_sale"] and \
+                            self.config["buff_auto_on_sale"]["buy_order"]["enable"]:
+                        self.confirm_supply_order()
+                self.logger.info("[BuffAutoOnSale] BUFF listing succeeded" + account_label + "!")
+            else:
+                self.logger.info("[BuffAutoOnSale] " + game["game"] + " inventory empty" + account_label + ". Skipping.")
+        return total_items
 
     def exec(self):
         self.logger.info("[BuffAutoOnSale] BUFF auto-listing plugin started. Sleeping 30s to stagger with auto-accept plugin")
@@ -828,43 +830,7 @@ class BuffAutoOnSale:
                         self.logger.info("[BuffAutoOnSale] Processing account " + str(account_index + 1) + "/" + str(len(self.available_accounts)))
                         
                         # Process this account's inventory
-                        items_count_this_account = 0
-                        for game in SUPPORT_GAME_TYPES:
-                            self.logger.info("[BuffAutoOnSale] Checking " + game["game"] + " inventory for account " + str(self._current_steamid) + "...")
-                            inventory_json = self.get_buff_inventory(
-                                state="cansell", sort_by="price.desc", game=game["game"], app_id=game["app_id"],
-                                force=force_refresh
-                            )
-                            items = inventory_json["items"]
-                            items_count_this_account += len(items)
-                            if len(items) != 0:
-                                self.logger.info(
-                                    "[BuffAutoOnSale] Found " + str(len(items)) + " sellable items in " + game["game"] +
-                                    " inventory for account " + str(self._current_steamid) + ". Listing..."
-                                )
-                                # De-duplicate by assetid to avoid processing the same item multiple times
-                                seen_assetids = set()
-                                items_to_sell = []
-                                for item in items:
-                                    asset = item["asset_info"]
-                                    asset_id = str(asset.get("assetid"))
-                                    if asset_id in seen_assetids:
-                                        continue
-                                    seen_assetids.add(asset_id)
-                                    asset["market_hash_name"] = item["market_hash_name"]
-                                    items_to_sell.append(asset)
-                                # List in groups of 10
-                                items_to_sell_group = [items_to_sell[i:i + 10] for i in range(0, len(items_to_sell), 10)]
-                                for items_to_sell in items_to_sell_group:
-                                    self.put_item_on_sale(items=items_to_sell, price=-1, description=description,
-                                                          game=game["game"], app_id=game["app_id"],
-                                                          use_range_price=use_range_price, custom_floats=custom_floats)
-                                    if 'buy_order' in self.config["buff_auto_on_sale"] and \
-                                            self.config["buff_auto_on_sale"]["buy_order"]["enable"]:
-                                        self.confirm_supply_order()
-                                self.logger.info("[BuffAutoOnSale] BUFF listing succeeded for account " + str(self._current_steamid) + "!")
-                            else:
-                                self.logger.info("[BuffAutoOnSale] " + game["game"] + " inventory empty for account " + str(self._current_steamid) + ". Skipping.")
+                        self._process_inventory(force_refresh, description, use_range_price, custom_floats)
                         
                         # Small delay between accounts to avoid rate limiting
                         if account_index < len(self.available_accounts) - 1:
@@ -875,44 +841,8 @@ class BuffAutoOnSale:
                 else:
                     # Single account mode (original logic)
                     while True:
-                        items_count_this_loop = 0
-                        for game in SUPPORT_GAME_TYPES:
-                            self.logger.info("[BuffAutoOnSale] Checking " + game["game"] + " inventory...")
-                            inventory_json = self.get_buff_inventory(
-                                state="cansell", sort_by="price.desc", game=game["game"], app_id=game["app_id"],
-                                force=force_refresh
-                            )
-                            items = inventory_json["items"]
-                            items_count_this_loop += len(items)
-                            if len(items) != 0:
-                                self.logger.info(
-                                    "[BuffAutoOnSale] Found " + str(len(items)) + " sellable items in " + game["game"] +
-                                    " inventory. Listing..."
-                                )
-                                # De-duplicate by assetid to avoid processing the same item multiple times
-                                seen_assetids = set()
-                                items_to_sell = []
-                                for item in items:
-                                    asset = item["asset_info"]
-                                    asset_id = str(asset.get("assetid"))
-                                    if asset_id in seen_assetids:
-                                        continue
-                                    seen_assetids.add(asset_id)
-                                    asset["market_hash_name"] = item["market_hash_name"]
-                                    items_to_sell.append(asset)
-                                # List in groups of 10
-                                items_to_sell_group = [items_to_sell[i:i + 10] for i in range(0, len(items_to_sell), 10)]
-                                for items_to_sell in items_to_sell_group:
-                                    self.put_item_on_sale(items=items_to_sell, price=-1, description=description,
-                                                          game=game["game"], app_id=game["app_id"],
-                                                          use_range_price=use_range_price, custom_floats=custom_floats)
-                                    if 'buy_order' in self.config["buff_auto_on_sale"] and \
-                                            self.config["buff_auto_on_sale"]["buy_order"]["enable"]:
-                                        self.confirm_supply_order()
-                                self.logger.info("[BuffAutoOnSale] BUFF listing succeeded!")
-                            else:
-                                self.logger.info("[BuffAutoOnSale] " + game["game"] + " inventory empty. Skipping.")
-                        if items_count_this_loop == 0:
+                        items_count = self._process_inventory(force_refresh, description, use_range_price, custom_floats)
+                        if items_count == 0:
                             self.logger.info("[BuffAutoOnSale] Inventory empty. This batch finished.")
                             break
             except Exception as e:
@@ -935,9 +865,7 @@ class BuffAutoOnSale:
         - No Steam trade offers are initiated; logs show intended offer flow.
         - Returns True to simulate success so caller flow continues predictably in debug.
         """
-        sleep_seconds_to_prevent_buff_ban = 10
-        if 'sleep_seconds_to_prevent_buff_ban' in self.config["buff_auto_on_sale"]:
-            sleep_seconds_to_prevent_buff_ban = self.config["buff_auto_on_sale"]["sleep_seconds_to_prevent_buff_ban"]
+        sleep_seconds_to_prevent_buff_ban = self.sleep_seconds_to_prevent_buff_ban
         url = "https://buff.163.com/api/market/goods/supply/manual_plus"
         data = {
             "game": game,
@@ -953,15 +881,7 @@ class BuffAutoOnSale:
             self.logger.info("[BuffAutoOnSale] Sleeping " + str(sleep_seconds_to_prevent_buff_ban) + "s to avoid IP ban")
             time.sleep(sleep_seconds_to_prevent_buff_ban)
             self.logger.info("[BuffAutoOnSale] Supplying item to highest buy order...")
-            self.session.get("https://buff.163.com/api/market/steam_trade", headers=self.buff_headers)
-            csrf_token = self.session.cookies.get("csrf_token", domain='buff.163.com')
-            headers = {
-                "User-Agent": self.buff_headers["User-Agent"],
-                "X-CSRFToken": csrf_token,
-                "X-Requested-With": "XMLHttpRequest",
-                "Content-Type": "application/json",
-                "Referer": "https://buff.163.com/market/sell_order/create?game=csgo",
-            }
+            headers = self._get_csrf_headers()
             response_json = self.session.post(url, json=data, headers=headers).json()
         else:
             self.logger.info("[BuffAutoOnSale] [DEBUG] Would supply to buy order with payload: " + json5.dumps(data))
@@ -989,14 +909,7 @@ class BuffAutoOnSale:
                     ],
                     "steamid": str(self._current_steamid)
                 }
-                csrf_token = self.session.cookies.get("csrf_token", domain='buff.163.com')
-                headers = {
-                    "User-Agent": self.buff_headers["User-Agent"],
-                    "X-CSRFToken": csrf_token,
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Content-Type": "application/json",
-                    "Referer": "https://buff.163.com/market/sell_order/create?game=csgo",
-                }
+                headers = self._get_csrf_headers()
                 resp_json = self.session.post(
                     "https://buff.163.com/api/market/manual_plus/seller_send_offer",
                     json=post_data,
@@ -1041,12 +954,7 @@ class BuffAutoOnSale:
                     finish_num += 1
                 else:
                     url = 'https://buff.163.com/api/market/bill_order/batch/info?bill_orders=' + order_id
-                    csrf_token = self.session.cookies.get("csrf_token", domain="buff.163.com")
-                    headers = {
-                        "User-Agent": self.buff_headers["User-Agent"],
-                        "X-CSRFToken": csrf_token,
-                        "Referer": "https://buff.163.com/market/sell_order/create?game=csgo",
-                    }
+                    headers = self._get_csrf_headers()
                     res_json = self.session.get(url, headers=headers).json()
                     if res_json["code"] == "OK" and len(res_json["data"]["items"]) > 0 and \
                             res_json["data"]["items"][0]["tradeofferid"] is not None:

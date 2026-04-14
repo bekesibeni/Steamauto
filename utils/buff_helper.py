@@ -101,7 +101,7 @@ def login_to_buff_by_qrcode(steam_client, proxies=None) -> str:
     if os.path.exists("qrcode.png"):
         try:
             os.remove("qrcode.png")
-        except:
+        except Exception:
             pass
     send_notification("BUFF login successful!", "BUFF Login")
     return cookies["session"]
@@ -115,7 +115,7 @@ def is_session_has_enough_permission(session: str, proxies=None) -> bool:
         if "data" not in response_json:
             return False
         return True
-    except:
+    except Exception:
         return False
 
 

@@ -2,10 +2,8 @@ import re
 import threading
 import time
 
-import json5
 import requests
 from bs4 import BeautifulSoup
-import utils.static as static
 from BuffApi import BuffAccount
 from utils.buff_helper import get_valid_session_for_buff
 from utils.logger import PluginLogger, handle_caught_exception
@@ -27,6 +25,8 @@ class BuffAutoAcceptOffer:
         self.master_panel_config = self.config.get("master_panel", {})
         self.api_url = self.master_panel_config.get("baseurl", "")
         self.api_key = self.master_panel_config.get("api_key", "")
+        self.transaction_fee_rate = float(self.master_panel_config.get("transaction_fee_rate", 0.025))
+        self.withdrawal_fee_rate = float(self.master_panel_config.get("withdrawal_fee_rate", 0.01))
         
         self.usd_to_cny_rate = 7.1098
         self.exchange_rate_lock = threading.Lock()
@@ -39,6 +39,12 @@ class BuffAutoAcceptOffer:
     def init(self) -> bool:
         return False
 
+    def _get_proxies(self):
+        """Return proxy config if enabled, else None."""
+        if self.config["buff_auto_accept_offer"].get("use_proxies", False):
+            return self.config.get("proxies")
+        return None
+
     def require_buyer_send_offer(self):
         try:
             logger.info('Enabling "buyer must initiate offer"...')
@@ -49,10 +55,6 @@ class BuffAutoAcceptOffer:
                 logger.error("Failed to enable buyer-initiated trade offers")
         except Exception as e:
             logger.error(f"Failed to enable buyer-initiated trade offers: {str(e)}")
-
-    def get_steam_info(self):
-        steam_info = self.buff_account.get('https://buff.163.com/account/api/steam/info').json()['data']
-        return steam_info
 
     def check_buff_account_state(self):
         try:
@@ -132,8 +134,8 @@ class BuffAutoAcceptOffer:
         usd_price = float(cny_price) / usd_to_cny
         platform_price = self.round_price(usd_price)
         
-        actual_price = platform_price / 1.025
-        actual_price = actual_price / 1.01
+        actual_price = platform_price / (1 + self.transaction_fee_rate)
+        actual_price = actual_price / (1 + self.withdrawal_fee_rate)
         actual_price = self.round_price(actual_price)
         
         return platform_price, actual_price
@@ -179,7 +181,7 @@ class BuffAutoAcceptOffer:
                 try:
                     response_text = response.text
                     logger.warning(f"Failed to post item to master panel. Status: {response.status_code}, Response: {response_text}")
-                except:
+                except Exception:
                     logger.warning(f"Failed to post item to master panel. Status: {response.status_code}")
                 return False
         except Exception as e:
@@ -188,9 +190,8 @@ class BuffAutoAcceptOffer:
 
     def exec(self):
         logger.info("BUFF auto-accept offer plugin started. Please wait...")
-        proxies = None
-        if self.config["buff_auto_accept_offer"].get("use_proxies", False):
-            proxies = self.config.get("proxies")
+        proxies = self._get_proxies()
+        if proxies:
             logger.info("Detected Steam proxy settings, applying same proxy to BUFF...")
 
         session = get_valid_session_for_buff(self.steam_client, logger, proxies=proxies)
@@ -201,7 +202,7 @@ class BuffAutoAcceptOffer:
             steamid_buff = user_info['steamid']
             logger.info('Sleeping 5s to avoid hitting APIs too frequently...')
             time.sleep(5)
-            steam_info = self.get_steam_info()
+            steam_info = self.buff_account.get_steam_info()
         except Exception as e:
             logger.error("Failed to get BUFF user info!")
             handle_caught_exception(e, "BuffAutoAcceptOffer")
@@ -236,6 +237,10 @@ class BuffAutoAcceptOffer:
             logger.info('"Buyer must initiate offer" is already enabled')
 
         ignored_offer = {}
+        retry_counts = {}   # offer_id -> number of processing attempts so far
+        MAX_RETRIES = 3     # add to ignored_offer only after this many attempts
+        deferred_offers = {}  # offer_id -> defer count, for offers waiting on float data
+        MAX_DEFER_COUNT = 3
         REPROCESS_THRESHOLD = 10
         IGNORE_CLEAR_INTERVAL = 300
         last_ignore_clear = time.time()
@@ -258,15 +263,14 @@ class BuffAutoAcceptOffer:
                     if ignored_offer:
                         logger.info(f"Clearing {len(ignored_offer)} ignored offers to allow reprocessing...")
                         ignored_offer.clear()
+                        retry_counts.clear()
                     last_ignore_clear = current_time
                 
                 logger.info("Checking BUFF items to deliver / to confirm...")
                 username = self.check_buff_account_state()
                 if username == "":
                     logger.info("BUFF login expired. Attempting re-login...")
-                    proxies = None
-                    if self.config["buff_auto_accept_offer"].get("use_proxies", False):
-                        proxies = self.config.get("proxies")
+                    proxies = self._get_proxies()
                     session = get_valid_session_for_buff(self.steam_client, logger, proxies=proxies)
                     if session == "":
                         logger.error("BUFF login expired and auto re-login failed!")
@@ -327,12 +331,10 @@ class BuffAutoAcceptOffer:
                                             
                                         trade_offer['target_client'] = target_client
                                         trade_offer['user_steamid'] = user_steamid
+                                        offer_goods_id = str(trade_offer["goods_id"])
                                         for goods_id, goods_info in response_data["goods_infos"].items():
-                                            goods_id = str(goods_id)
-                                            trade_offer["goods_id"] = str(trade_offer["goods_id"])
-                                            if goods_id == trade_offer["goods_id"]:
-                                                trade_offer["goods_infos"] = {}
-                                                trade_offer["goods_infos"][goods_id] = goods_info
+                                            if str(goods_id) == offer_goods_id:
+                                                trade_offer["goods_infos"] = {str(goods_id): goods_info}
                                                 break
                                         trades.append(trade_offer)
 
@@ -389,10 +391,15 @@ class BuffAutoAcceptOffer:
                                                         if price_span:
                                                             cny_price = price_span.get("data-price")
                                                         
+                                                        # Try to get item name from the row
+                                                        item_name_tag = row.find("a", class_="item-detail-name") or row.find("div", class_="item-detail-name")
+                                                        row_item_name = item_name_tag.get_text(strip=True) if item_name_tag else None
+
                                                         if assetid and float_value and cny_price:
                                                             float_map[assetid] = {
                                                                 "float": float_value,
-                                                                "cny_price": cny_price
+                                                                "cny_price": cny_price,
+                                                                "market_hash_name": row_item_name
                                                             }
                         except Exception as e:
                             logger.error(f"[BuffAutoAcceptOffer] Failed to fetch float values: {str(e)}", exc_info=True)
@@ -407,6 +414,7 @@ class BuffAutoAcceptOffer:
                                     if ignored_offer[offer_id] > REPROCESS_THRESHOLD:
                                         logger.warning(f"Offer {offer_id} ignored {ignored_offer[offer_id]-1} times. Above threshold {REPROCESS_THRESHOLD}. Reprocessing.")
                                         del ignored_offer[offer_id]
+                                        retry_counts.pop(offer_id, None)
                                         filtered_trades.append(trade)
                                     else:
                                         logger.info(f"Offer {offer_id} already handled. Skipping.")
@@ -422,84 +430,143 @@ class BuffAutoAcceptOffer:
                                 logger.info(f"Processing offer {i+1} / {len(filtered_trades)}. Offer ID: {offer_id}")
                                 
                                 try:
-                                    item_name = "Unknown"
-                                    float_value = None
-                                    cny_price = None
-                                    market_hash_name = "Unknown"
-                                    
+                                    # Build a default name from goods_infos (fallback for items not in float_map)
+                                    default_item_name = "Unknown"
+                                    default_market_hash_name = "Unknown"
                                     if "goods_infos" in trade and trade["goods_infos"]:
                                         for goods_id, goods_info in trade["goods_infos"].items():
-                                            item_name = goods_info.get("name", "Unknown")
-                                            market_hash_name = goods_info.get("market_hash_name", item_name)
+                                            default_item_name = goods_info.get("name", "Unknown")
+                                            default_market_hash_name = goods_info.get("market_hash_name", default_item_name)
                                             break
-                                    
+
+                                    # Collect data for ALL items in this trade
+                                    trade_items = []
                                     for item in trade.get("items_to_trade", []):
                                         assetid = item.get("assetid")
+                                        item_float = None
+                                        item_cny_price = None
+                                        item_market_hash_name = default_market_hash_name
                                         if assetid and assetid in float_map:
                                             item_data = float_map[assetid]
                                             if isinstance(item_data, dict):
-                                                float_value = item_data.get("float")
-                                                cny_price = item_data.get("cny_price")
+                                                item_float = item_data.get("float")
+                                                item_cny_price = item_data.get("cny_price")
+                                                if item_data.get("market_hash_name"):
+                                                    item_market_hash_name = item_data["market_hash_name"]
                                             else:
-                                                float_value = item_data
-                                            break
-                                    
-                                    if float_value:
-                                        logger.info(f"Confirming item {item_name} float: {float_value}")
-                                    else:
-                                        logger.info(f"Confirming item {item_name}")
-                                    
+                                                item_float = item_data
+                                        trade_items.append({
+                                            "assetid": assetid,
+                                            "float": item_float,
+                                            "cny_price": item_cny_price,
+                                            "market_hash_name": item_market_hash_name,
+                                        })
+
+                                    item_count = len(trade_items)
+                                    if item_count > 1:
+                                        logger.info(f"Trade offer {offer_id} contains {item_count} items (multi-item trade)")
+
+                                    for ti in trade_items:
+                                        if ti["float"]:
+                                            logger.info(f"  Item {ti['market_hash_name']} float: {ti['float']}")
+                                        else:
+                                            logger.info(f"  Item {ti['market_hash_name']} (no float yet)")
+
+                                    # If master panel is configured, check that all items have float data.
+                                    # If not, defer the offer so it can be retried next cycle when floats are available.
+                                    if self.api_url and self.api_key:
+                                        missing_floats = [ti for ti in trade_items if not ti["float"]]
+                                        defer_count = deferred_offers.get(offer_id, 0)
+                                        if missing_floats and defer_count < MAX_DEFER_COUNT:
+                                            deferred_offers[offer_id] = defer_count + 1
+                                            logger.info(
+                                                f"Deferring offer {offer_id}: {len(missing_floats)}/{item_count} item(s) missing float data. "
+                                                f"Will retry next cycle (attempt {defer_count + 1}/{MAX_DEFER_COUNT})"
+                                            )
+                                            continue
+
+                                    # Clean up defer counter once we proceed
+                                    deferred_offers.pop(offer_id, None)
+
                                     desc = self.format_item_info(trade)
-                                    
+
                                     user_steamid = trade.get('user_steamid', '')
                                     if not user_steamid:
                                         logger.error(f"No user_steamid found for offer {offer_id}")
                                         continue
-                                        
+
                                     target_client = multi_account_manager.get_client_for_steamid(user_steamid)
                                     if not target_client:
                                         logger.error(f"No Steam client found for user_steamid: {user_steamid}")
                                         continue
-                                    
+
                                     if accept_trade_offer(target_client, self.steam_client_mutex, offer_id, desc=desc):
-                                        ignored_offer[offer_id] = 1
-                                        logger.info("Accepted. Offer added to ignore list.")
-                                        
-                                        # Try to get price from order_info if not in float_map
-                                        if not cny_price and offer_id in self.order_info:
-                                            try:
-                                                cny_price = str(self.order_info[offer_id].get("price", ""))
-                                                if cny_price:
-                                                    logger.info(f"Using price from order_info for offer {offer_id}: {cny_price}")
-                                            except Exception as e:
-                                                logger.debug(f"Could not get price from order_info: {str(e)}")
-                                        
-                                        if float_value and cny_price and self.api_url and self.api_key:
-                                            try:
-                                                platform_price, actual_price = self.calculate_prices(cny_price)
-                                                if self.post_to_master_panel(float_value, platform_price, actual_price, market_hash_name):
-                                                    logger.info(f"Successfully sent item {item_name} to master panel")
-                                            except Exception as e:
-                                                logger.warning(f"Failed to process prices for master panel: {str(e)}")
-                                        elif self.api_url and self.api_key:
-                                            # Log why item wasn't reported
-                                            missing = []
-                                            if not float_value:
-                                                missing.append("float_value")
-                                            if not cny_price:
-                                                missing.append("cny_price")
-                                            logger.warning(f"Item {item_name} (offer {offer_id}) not reported to master panel: missing {', '.join(missing)}")
+                                        attempt = retry_counts.get(offer_id, 0) + 1
+                                        retry_counts[offer_id] = attempt
+                                        if attempt >= MAX_RETRIES:
+                                            ignored_offer[offer_id] = 1
+                                            retry_counts.pop(offer_id, None)
+                                            logger.info(f"Accepted (attempt {attempt}/{MAX_RETRIES}). Offer permanently added to ignore list.")
+                                        else:
+                                            logger.info(f"Accepted (attempt {attempt}/{MAX_RETRIES}). Will retry to confirm full delivery.")
+
+                                        # Post ALL items to master panel
+                                        panel_sent = 0
+                                        for ti in trade_items:
+                                            item_float = ti["float"]
+                                            item_cny_price = ti["cny_price"]
+                                            item_mhn = ti["market_hash_name"]
+
+                                            # Try to get price from order_info if not in float_map
+                                            if not item_cny_price and offer_id in self.order_info:
+                                                try:
+                                                    item_cny_price = str(self.order_info[offer_id].get("price", ""))
+                                                    if item_cny_price:
+                                                        logger.info(f"Using price from order_info for {item_mhn}: {item_cny_price}")
+                                                except Exception as e:
+                                                    logger.debug(f"Could not get price from order_info: {str(e)}")
+
+                                            if item_float and item_cny_price and self.api_url and self.api_key:
+                                                try:
+                                                    platform_price, actual_price = self.calculate_prices(item_cny_price)
+                                                    if self.post_to_master_panel(item_float, platform_price, actual_price, item_mhn):
+                                                        panel_sent += 1
+                                                        logger.info(f"Successfully sent item {item_mhn} to master panel")
+                                                except Exception as e:
+                                                    logger.warning(f"Failed to process prices for master panel ({item_mhn}): {str(e)}")
+                                            elif self.api_url and self.api_key:
+                                                missing = []
+                                                if not item_float:
+                                                    missing.append("float_value")
+                                                if not item_cny_price:
+                                                    missing.append("cny_price")
+                                                logger.warning(f"Item {item_mhn} (offer {offer_id}) not reported to master panel: missing {', '.join(missing)}")
+
+                                        if item_count > 1:
+                                            logger.info(f"Multi-item trade {offer_id}: sent {panel_sent}/{item_count} items to master panel")
                                     else:
-                                        ignored_offer[offer_id] = 1
-                                        logger.info("Offer processing failed. Added to ignore list to prevent repeated attempts.")
+                                        attempt = retry_counts.get(offer_id, 0) + 1
+                                        retry_counts[offer_id] = attempt
+                                        if attempt >= MAX_RETRIES:
+                                            ignored_offer[offer_id] = 1
+                                            retry_counts.pop(offer_id, None)
+                                            logger.info(f"Offer processing failed (attempt {attempt}/{MAX_RETRIES}). Added to ignore list.")
+                                        else:
+                                            logger.info(f"Offer processing failed (attempt {attempt}/{MAX_RETRIES}). Will retry next cycle.")
 
                                     if i != len(filtered_trades) - 1:
                                         logger.info("Waiting 5s before next offer to reduce Steam API pressure...")
                                         time.sleep(5)
                                 except Exception as e:
-                                    ignored_offer[offer_id] = 1
-                                    logger.error(f"Error while processing offer: {str(e)}", exc_info=True)
-                                    logger.info("Error occurred. Offer added to ignore list to prevent repeated attempts.")
+                                    attempt = retry_counts.get(offer_id, 0) + 1
+                                    retry_counts[offer_id] = attempt
+                                    logger.error(f"Error while processing offer (attempt {attempt}/{MAX_RETRIES}): {str(e)}", exc_info=True)
+                                    if attempt >= MAX_RETRIES:
+                                        ignored_offer[offer_id] = 1
+                                        retry_counts.pop(offer_id, None)
+                                        logger.info("Error occurred. Max retries reached. Offer added to ignore list.")
+                                    else:
+                                        logger.info(f"Error occurred. Will retry next cycle ({attempt}/{MAX_RETRIES}).")
 
                     except Exception as e:
                         handle_caught_exception(e, "BuffAutoAcceptOffer")

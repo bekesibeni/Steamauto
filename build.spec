@@ -31,7 +31,6 @@ hidden_imports = [
         'utils.cloud_service',
         'utils.static',
         'json5',
-        'numpy',
         'schedule'
     ]
 # Don't add requirements.txt lines as hidden imports as they are package names, not module names

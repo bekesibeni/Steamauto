@@ -26,8 +26,7 @@ from utils.static import (BUILD_INFO, CONFIG_FILE_PATH, CONFIG_FOLDER,
                           STEAM_ACCOUNT_INFO_FILE_PATH)
 from utils.steam_client import login_to_steam, steam_client_mutex
 from utils.multi_account_manager import initialize_multi_account_manager, get_multi_account_manager
-from utils.tools import (calculate_sha256, exit_code, get_encoding, jobHandler,
-                         pause)
+from utils.tools import (calculate_sha256, exit_code, get_encoding, pause)
 
 
 def handle_global_exception(exc_type, exc_value, exc_traceback):
@@ -292,7 +291,6 @@ def exit_app(signal_, frame):
     should_exit = True
     if not tried_exit:
         tried_exit = True
-        jobHandler.terminate_all()
         os._exit(exit_code.get())
     else:
         pid = os.getpid()
@@ -363,5 +361,4 @@ if __name__ == "__main__":
         exit_code.set(main())  # type: ignore
     except KeyboardInterrupt:
         should_exit = True
-        jobHandler.terminate_all()
     exit_app(None, None)

@@ -80,7 +80,7 @@ class BuffAccount:
     def get(self, url, **kwargs):
         for i in range(10):
             response = self.session.get(url, **kwargs)
-            logger.debug(f"GET {url} {response.status_code} {json.dumps(response.json(), ensure_ascii=False)}")
+            logger.debug(f"GET {url} {response.status_code} {response.text[:500]}")
             if "系统繁忙" in response.text:
                 logger.warning(f"BUFF interface busy, retrying...{i + 1}/10")
                 time.sleep(2)
@@ -91,7 +91,7 @@ class BuffAccount:
     def post(self, url, **kwargs):
         for i in range(5):
             response = self.session.post(url, **kwargs)
-            logger.debug(f"POST {url} {response.status_code} {json.dumps(response.json(), ensure_ascii=False)}")
+            logger.debug(f"POST {url} {response.status_code} {response.text[:500]}")
             if "系统繁忙" in response.text:
                 logger.warning(f"BUFF interface busy, retrying...{i + 1}/5")
                 time.sleep(2)
@@ -193,7 +193,7 @@ class BuffAccount:
                 data = response.json()
                 if data.get("code") == "OK" and "data" in data:
                     return data
-            except:
+            except Exception:
                 # If JSON parsing fails, return raw text
                 return {"code": "OK", "data": response.text}
         return {}
@@ -241,33 +241,26 @@ class BuffAccount:
             "page_num": page_num,
             "sort_by": sort_by,
         }
-        need_login = False
-        if min_paintseed:
+        need_login = (
+            (min_paintseed is not None) or
+            (max_paintseed is not None) or
+            (sort_by != "default")
+        )
+        if min_paintseed is not None:
             params["min_paintseed"] = min_paintseed
-            need_login = True
-        if max_paintseed:
+        if max_paintseed is not None:
             params["max_paintseed"] = max_paintseed
-            need_login = True
-        if sort_by != "default":
-            need_login = True
-        if need_login:
-            return json.loads(
-                self.get(
-                    f"{self.BASE_URL}/api/market/goods/sell_order",
-                    params=params,
-                    headers=get_random_header(),
-                    proxies=proxy,
-                ).text
-            ).get("data")
-        else:
-            return json.loads(
-                requests.get(
-                    f"{self.BASE_URL}/api/market/goods/sell_order",
-                    params=params,
-                    headers=get_random_header(),
-                    proxies=proxy,
-                ).text
-            ).get("data")
+        request_method = self if need_login else requests
+        url = f"{self.BASE_URL}/api/market/goods/sell_order"
+        headers = get_random_header()
+        try:
+            return request_method.get(url, params=params, headers=headers, proxies=proxy, timeout=10).json().get("data")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request failed: {e}")
+            return None
+        except ValueError as e:
+            logger.error(f"Response is not JSON: {e}")
+            return None
 
     def get_available_payment_methods(self, sell_order_id, goods_id, price, game_name="csgo") -> dict:
         """
@@ -277,28 +270,30 @@ class BuffAccount:
         :param price: Skin price
         :return: dict key will only contain buff-alipay and buff-bankcard, if key doesn't exist, it means this payment method is unavailable. value is current balance
         """
-
-        methods = (
-            json.loads(
-                self.get(
-                    f"{self.BASE_URL}/api/market/goods/buy/preview",
-                    params={
-                        "game": game_name,
-                        "sell_order_id": sell_order_id,
-                        "goods_id": goods_id,
-                        "price": price,
-                    },
-                ).text
-            )
-            .get("data")
-            .get("pay_methods")
-        )
-        available_methods = dict()
-        if methods[0].get("error") is None:
-            available_methods["buff-alipay"] = methods[0].get("balance")
-        if methods[2].get("error") is None:
-            available_methods["buff-bankcard"] = methods[2].get("balance")
-        return available_methods
+        try:
+            data = self.get(
+                f"{self.BASE_URL}/api/market/goods/buy/preview",
+                params={
+                    "game": game_name,
+                    "sell_order_id": sell_order_id,
+                    "goods_id": goods_id,
+                    "price": price,
+                },
+            ).json().get("data", {})
+            if not data:
+                raise ValueError("Unable to get payment methods. Check params and account status.")
+            methods = data.get("pay_methods", [])
+            available_methods = dict()
+            if not methods or len(methods) < 3:
+                raise ValueError("Unable to get payment methods. Check params and account status.")
+            if methods[0].get("error") is None:
+                available_methods["buff-alipay"] = methods[0].get("balance")
+            if methods[2].get("error") is None:
+                available_methods["buff-bankcard"] = methods[2].get("balance")
+            return available_methods
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request failed: {e}")
+            return None
 
     def buy_goods(
         self,
@@ -321,8 +316,14 @@ class BuffAccount:
         If seller has disabled seller-initiated offers, it will automatically change to buyer sending offer!!!
         Recommend using with github.com/jiajiaxd/Buff-Bot for better results!
         :param game_name: Default is csgo
-        :return: If purchase successful returns 'Purchase successful', if failed returns error message
+        :return: Response JSON from the send-offer step. Caller inspects code/msg to determine success.
         """
+        PAY_METHOD_MAP = {
+            "buff-bankcard": 1,
+            "buff-alipay": 3,
+        }
+        if pay_method not in PAY_METHOD_MAP:
+            raise ValueError("Invalid pay_method")
         load = {
             "game": game_name,
             "goods_id": goods_id,
@@ -330,13 +331,15 @@ class BuffAccount:
             "sell_order_id": sell_order_id,
             "token": "",
             "cdkey_id": "",
+            "pay_method": PAY_METHOD_MAP[pay_method],
         }
-        if pay_method == "buff-bankcard":
-            load["pay_method"] = 1
-        elif pay_method == "buff-alipay":
-            load["pay_method"] = 3
-        else:
-            raise ValueError("Invalid pay_method")
+        try:
+            # Refresh csrf_token before the buy request
+            self.get_notification()
+            self.session.cookies.get("csrf_token")
+        except Exception as e:
+            raise ValueError("Unable to get CSRF token. Check login status.") from e
+
         headers = copy.deepcopy(self.session.headers)
         headers["accept"] = "application/json, text/javascript, */*; q=0.01"
         headers["content-type"] = "application/json"
@@ -344,37 +347,44 @@ class BuffAccount:
         headers["origin"] = self.BASE_URL
         headers["referer"] = f"{self.BASE_URL}/goods/{str(goods_id)}?from=market"
         headers["x-requested-with"] = "XMLHttpRequest"
-        # Get latest csrf_token
-        self.get(f"{self.BASE_URL}/api/message/notification")
-        self.session.cookies.get("csrf_token")
         headers["x-csrftoken"] = str(self.session.cookies.get("csrf_token"))
-        response = json.loads(self.post(f"{self.BASE_URL}/api/market/goods/buy", json=load, headers=headers).text)
-        bill_id = response.get("data").get("id")
+
+        response = self.post(f"{self.BASE_URL}/api/market/goods/buy", json=load, headers=headers).json()
+        data = response.get("data", {})
+        bill_id = data.get("id", None)
+        if bill_id is None:
+            raise ValueError("Unable to get order ID. Check params and account status.")
         self.get(
             f"{self.BASE_URL}/api/market/bill_order/batch/info",
             params={"bill_orders": bill_id},
         )
         headers["x-csrftoken"] = str(self.session.cookies.get("csrf_token"))
-        time.sleep(0.5)  # Since Buff server needs time to process payment, sleep must be added here, otherwise next request cannot be sent
+        time.sleep(0.5)  # Buff needs a moment to process payment before the next request
         if ask_seller_send_offer:
-            load = {"bill_orders": [bill_id], "game": game_name}
-            response = self.post(
-                f"{self.BASE_URL}/api/market/bill_order/ask_seller_to_send_offer",
-                json=load,
-                headers=headers,
-            )
+            return self.ask_seller_to_send_offer(bill_id, headers, game_name)
         else:
-            load = {"bill_order_id": bill_id, "game": game_name}
-            response = self.post(
-                f"{self.BASE_URL}/api/market/bill_order/notify_buyer_to_send_offer",
-                json=load,
-                headers=headers,
-            )
-        response = json.loads(response.text)
-        if response.get("msg") is None and response.get("code") == "OK":
-            return "Purchase successful"
-        else:
-            return response
+            return self.notify_buyer_to_send_offer(bill_id, headers, game_name)
+
+    def ask_seller_to_send_offer(self, bill_id, headers, game_name="csgo"):
+        load = {"bill_orders": [bill_id], "game": game_name}
+        response = self.post(
+            f"{self.BASE_URL}/api/market/bill_order/ask_seller_to_send_offer",
+            json=load,
+            headers=headers,
+        )
+        return response.json()
+
+    def notify_buyer_to_send_offer(self, bill_id, headers, game_name="csgo"):
+        load = {"bill_order_id": bill_id, "game": game_name}
+        response = self.post(
+            f"{self.BASE_URL}/api/market/bill_order/notify_buyer_to_send_offer",
+            json=load,
+            headers=headers,
+        )
+        return response.json()
+
+    def get_steam_info(self):
+        return self.get(f"{self.BASE_URL}/account/api/steam/info").json()["data"]
 
     def get_notification(self, headers=None) -> dict:
         """
@@ -415,17 +425,20 @@ class BuffAccount:
         )
         success = []
         problem_assets = {}
-        for good in response.json()["data"].keys():
-            if response.json()["data"][good] == "OK":
+        resp_data = response.json()["data"]
+        for good in resp_data.keys():
+            if resp_data[good] == "OK":
                 success.append(good)
             else:
-                problem_assets[good] = response.json()["data"][good]
+                problem_assets[good] = resp_data[good]
         return success, problem_assets
 
-    def cancel_sale(self, sell_orders: list, exclude_sell_orders: list = []):
+    def cancel_sale(self, sell_orders: list, exclude_sell_orders: list = None):
         """
         Returns number of successfully delisted items
         """
+        if exclude_sell_orders is None:
+            exclude_sell_orders = []
         success = 0
         problem_sell_orders = {}
         for index in range(0, len(sell_orders), 50):
@@ -438,13 +451,15 @@ class BuffAccount:
                 },
                 headers=self.CSRF_Fucker(),
             )
-            if response.json()["code"] != "OK":
-                raise Exception(response.json().get("msg", None))
-            for key in response.json()["data"].keys():
-                if response.json()["data"][key] == "OK":
+            resp_json = response.json()
+            if resp_json["code"] != "OK":
+                raise Exception(resp_json.get("msg", None))
+            resp_data = resp_json["data"]
+            for key in resp_data.keys():
+                if resp_data[key] == "OK":
                     success += 1
                 else:
-                    problem_sell_orders[key] = response.json()["data"][key]
+                    problem_sell_orders[key] = resp_data[key]
         return success, problem_sell_orders
 
     def get_on_sale(self, page_num=1, page_size=500, mode="2,5", fold="0"):
@@ -475,13 +490,15 @@ class BuffAccount:
                 },
                 headers=self.CSRF_Fucker(),
             )
-            if response.json()["code"] != "OK":
-                raise Exception(response.json().get("msg", None))
-            for key in response.json()["data"].keys():
-                if response.json()["data"][key] == "OK":
+            resp_json = response.json()
+            if resp_json["code"] != "OK":
+                raise Exception(resp_json.get("msg", None))
+            resp_data = resp_json["data"]
+            for key in resp_data.keys():
+                if resp_data[key] == "OK":
                     success += 1
                 else:
-                    problems[key] = response.json()["data"][key]
+                    problems[key] = resp_data[key]
         return success, problems
 
     @no_type_check
