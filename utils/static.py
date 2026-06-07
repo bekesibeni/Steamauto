@@ -160,6 +160,8 @@ DEFAULT_CONFIG_JSON = r"""
     "whitelist_time": [],
     // Random listing chance 0–100
     "random_chance": 100,
+    // Price ceiling. Items whose computed list price exceeds this will not be listed. 0 = no limit.
+    "max_price": 0,
     // Listing description. Empty means none.
     "description": "",
     // Inventory check interval (seconds)

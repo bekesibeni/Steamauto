@@ -279,28 +279,26 @@ class BuffAutoAcceptOffer:
 
                 notification = self.buff_account.get_notification()
                 if 'error' in notification:
-                    logger.error(f"Failed to fetch pending orders. Error: {notification['error']}")
-                    logger.info(f"Retrying in {interval} seconds...")
-                    time.sleep(interval)
-                    continue
+                    logger.error(f"Failed to fetch pending orders. Error: {notification['error']}. Falling back to direct delivery check...")
+                    notification = None
+                else:
+                    if isinstance(notification, dict) and "to_deliver_order" in notification:
+                        to_deliver_order = notification["to_deliver_order"]
+                        try:
+                            csgo_count = 0 if "csgo" not in to_deliver_order else int(to_deliver_order["csgo"])
+                            dota2_count = 0 if (dota2_support or ("dota2" not in to_deliver_order)) else int(to_deliver_order["dota2"])
+                            total_count = csgo_count + dota2_count
 
-                if isinstance(notification, dict) and "to_deliver_order" in notification:
-                    to_deliver_order = notification["to_deliver_order"]
-                    try:
-                        csgo_count = 0 if "csgo" not in to_deliver_order else int(to_deliver_order["csgo"])
-                        dota2_count = 0 if (dota2_support or ("dota2" not in to_deliver_order)) else int(to_deliver_order["dota2"])
-                        total_count = csgo_count + dota2_count
+                            if csgo_count != 0 or dota2_count != 0:
+                                logger.info(f"Detected {total_count} pending delivery request(s)")
+                                logger.info(f"CSGO to deliver: {csgo_count}")
+                                if dota2_support:
+                                    logger.info(f"DOTA2 to deliver: {dota2_count}")
+                        except TypeError as e:
+                            handle_caught_exception(e, "BuffAutoAcceptOffer", known=True)
+                            logger.error("BUFF API returned invalid data. Check network or try later!")
 
-                        if csgo_count != 0 or dota2_count != 0:
-                            logger.info(f"Detected {total_count} pending delivery request(s)")
-                            logger.info(f"CSGO to deliver: {csgo_count}")
-                            if dota2_support:
-                                logger.info(f"DOTA2 to deliver: {dota2_count}")
-                    except TypeError as e:
-                        handle_caught_exception(e, "BuffAutoAcceptOffer", known=True)
-                        logger.error("BUFF API returned invalid data. Check network or try later!")
-
-                if any(list(notification["to_deliver_order"].values()) + list(notification["to_confirm_sell"].values())):
+                if not notification or any(list(notification["to_deliver_order"].values()) + list(notification["to_confirm_sell"].values())):
                     trades = self.buff_account.get_steam_trade()
                     logger.info("Sleeping 5s to avoid hitting APIs too frequently...")
                     time.sleep(5)

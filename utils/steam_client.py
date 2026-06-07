@@ -112,6 +112,13 @@ def _save_token_cache(username: str, auth_info: Dict[str, Any]):
         handle_caught_exception(e, known=True)
         logger.error(f"Failed to save token cache: {cache_path}")
 
+
+def _bind_client_credentials(client: SteamClient, username: str, password: str):
+    # Bind credentials onto the client so the background refresh thread's relogin() can re-auth.
+    # Without this, sessions restored from cached/refresh tokens leave _password=None and relogin fails.
+    client.username = username
+    client._password = password
+
 # ================== Session and proxy settings ======================
 
 def _setup_client_session(client: SteamClient, config: dict):
@@ -428,6 +435,7 @@ def login_to_steam(config: dict):
             _setup_client_session(client, config)
             if client.set_and_verify_access_token(steamid_cache, access_token, steam_account_info):
                 logger.info("Login with cached access_token succeeded")
+                _bind_client_credentials(client, username, password)
                 steam_client = client
                 static.STEAM_ACCOUNT_NAME = client.username or username
                 static.STEAM_64_ID = client.get_steam64id_from_cookies()
@@ -463,6 +471,7 @@ def login_to_steam(config: dict):
                 auth_info = client.loginByRefreshToken(refresh_token, steamid_cache, steam_account_info)
                 if auth_info and client.is_session_alive():
                     logger.info("Login via refresh_token succeeded")
+                    _bind_client_credentials(client, username, password)
                     steam_client = client
                     _save_token_cache(username, auth_info)
                     static.STEAM_ACCOUNT_NAME = client.username or username
@@ -490,6 +499,7 @@ def login_to_steam(config: dict):
         auth_info = client.login(username, password, steam_account_info)
         if client.is_session_alive():
             logger.info("Username/password login succeeded")
+            _bind_client_credentials(client, username, password)
             steam_client = client
             if auth_info and isinstance(auth_info, dict):
                 _save_token_cache(username, auth_info)

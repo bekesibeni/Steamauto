@@ -428,6 +428,15 @@ class BuffAutoOnSale:
                     min_paint_wear=min_paint_wear,
                     max_paint_wear=max_paint_wear,
                 )
+
+            # Price-ceiling filter: skip items priced above the configured maximum (0 = no limit)
+            max_price = self.config["buff_auto_on_sale"].get("max_price", 0)
+            if max_price and sell_price > 0 and sell_price > max_price:
+                self.logger.info("[BuffAutoOnSale] Item " + item["market_hash_name"] +
+                                 " price " + str(sell_price) + " exceeds max_price " + str(max_price) +
+                                 "; will not be listed.")
+                continue
+
             if supply_buy_orders:
                 highest_buy_order = self.get_highest_buy_order(item["goods_id"], game, app_id, paint_wear=paint_wear,
                                                                require_auto_accept=only_auto_accept,

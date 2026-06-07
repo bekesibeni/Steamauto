@@ -392,7 +392,7 @@ class SteamClient:
         return_data = {"response": {"trade_offers_received": [], "trade_offers_sent": []}}
         steam_id = self.get_steam64id_from_cookies()
         response = self._session.get(
-            f'https://steamcommunity.com/profiles/{steam_id}/tradeoffers/?l=english'
+            f'https://steamcommunity.com/profiles/{steam_id}/tradeoffers/?l=english', timeout=15
         )
         soup = bs4.BeautifulSoup(response.text, 'html.parser')
         trade_offer_list = soup.find_all('div', class_='tradeoffer')
@@ -439,7 +439,7 @@ class SteamClient:
                         f'http://api.steampowered.com/ISteamEconomy/GetAssetClassInfo/v1'
                         f'?key={self._api_key}&format=json&appid=730&class_count=1&classid0={item["class_id"]}'
                     )
-                    data = self._session.get(url).json()
+                    data = self._session.get(url, timeout=15).json()
 
                     icon_url = data['result'][str(item['class_id'])]['icon_url']
                     market_hash_name = data['result'][item['class_id']]['market_hash_name']
@@ -468,7 +468,7 @@ class SteamClient:
                         f'http://api.steampowered.com/ISteamEconomy/GetAssetClassInfo/v1'
                         f'?key={self._api_key}&format=json&appid=730&class_count=1&classid0={item["class_id"]}'
                     )
-                    data = self._session.get(url).json()
+                    data = self._session.get(url, timeout=15).json()
 
                     icon_url = data['result'][str(item['class_id'])]['icon_url']
                     market_hash_name = data['result'][item['class_id']]['market_hash_name']
@@ -598,7 +598,7 @@ class SteamClient:
         url = self._get_trade_offer_url(trade_offer_id)
         api_response = self._session.get(url, allow_redirects=False, timeout=15)
         while api_response.status_code == 302:
-            api_response = self._session.get(api_response.headers['Location'], allow_redirects=False)
+            api_response = self._session.get(api_response.headers['Location'], allow_redirects=False, timeout=15)
         offer_response_text = api_response.text
         if "You have logged in from a new device. In order to protect the items" in offer_response_text:
             raise SevenDaysHoldException("Account has logged in a new device and can't trade for 7 days")

@@ -78,6 +78,8 @@ class BuffAccount:
         self.get_notification(headers=headers)
 
     def get(self, url, **kwargs):
+        if "timeout" not in kwargs:
+            kwargs["timeout"] = 10
         for i in range(10):
             response = self.session.get(url, **kwargs)
             logger.debug(f"GET {url} {response.status_code} {response.text[:500]}")
@@ -89,6 +91,8 @@ class BuffAccount:
         return response
 
     def post(self, url, **kwargs):
+        if "timeout" not in kwargs:
+            kwargs["timeout"] = 10
         for i in range(5):
             response = self.session.post(url, **kwargs)
             logger.debug(f"POST {url} {response.status_code} {response.text[:500]}")
