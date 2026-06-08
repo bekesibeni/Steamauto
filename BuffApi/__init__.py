@@ -217,10 +217,40 @@ class BuffAccount:
 
     def get_user_brief_assest(self) -> dict:
         """
-        Contains user balance and other information
+        Contains user balance and other information.
+        with_pending_divide_amount=1 is required, otherwise BUFF returns
+        pending_divide_amount as "0" instead of the real pending total.
         :return: dict
         """
-        return json.loads(self.get(f"{self.BASE_URL}/api/asset/get_brief_asset").text).get("data")
+        response = self.get(
+            f"{self.BASE_URL}/api/asset/get_brief_asset/",
+            params={"with_pending_divide_amount": 1},
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if data["code"] == "OK" and "data" in data:
+                return data["data"]
+        return {}
+
+    def get_balance(self) -> Dict[str, float]:
+        """
+        Get the account balance from the brief asset endpoint.
+        - cash_amount: available wallet balance
+        - pending_divide_amount: amount pending to be divided/settled
+        :return: dict with "cash_amount" and "pending_divide_amount" as floats
+        """
+        data = self.get_user_brief_assest()
+
+        def _to_float(value) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        return {
+            "cash_amount": _to_float(data.get("cash_amount")),
+            "pending_divide_amount": _to_float(data.get("pending_divide_amount")),
+        }
 
     def search_goods(self, key: str, game_name="csgo") -> list:
         return (

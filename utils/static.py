@@ -301,6 +301,8 @@ DEFAULT_CONFIG_JSON = r"""
     "baseurl": "",
     // Master panel API key
     "api_key": "",
+    // Human-friendly label for this account in the hourly balance report. Falls back to the BUFF nickname if empty.
+    "label": "",
     // Fees used when computing actualPrice reported to the master panel from the platform price.
     // actualPrice = platformPrice / (1 + transaction_fee_rate) / (1 + withdrawal_fee_rate)
     // Example: 0.025 = 2.5% transaction fee, 0.01 = 1% withdrawal fee.

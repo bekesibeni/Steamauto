@@ -27,14 +27,12 @@ class BuffAutoAcceptOffer:
         self.api_key = self.master_panel_config.get("api_key", "")
         self.transaction_fee_rate = float(self.master_panel_config.get("transaction_fee_rate", 0.025))
         self.withdrawal_fee_rate = float(self.master_panel_config.get("withdrawal_fee_rate", 0.01))
-        
+        self.balance_label = self.master_panel_config.get("label", "")
+
+        # USD->CNY rate. Sourced from BUFF user info (buff_price_currency_rate_base_usd)
+        # and refreshed hourly by the balance report worker; 7.1098 is only a startup fallback.
         self.usd_to_cny_rate = 7.1098
         self.exchange_rate_lock = threading.Lock()
-        self.exchange_rate_fetched = False
-        
-        if self.api_url and self.api_key:
-            self.exchange_rate_thread = threading.Thread(target=self._exchange_rate_worker, daemon=True)
-            self.exchange_rate_thread.start()
 
     def init(self) -> bool:
         return False
@@ -88,32 +86,59 @@ class BuffAutoAcceptOffer:
 
         return result
     
-    def fetch_exchange_rate(self):
-        """Fetch USD to CNY exchange rate from API"""
+    def _apply_rate_from_user_info(self, user_info):
+        """Update the cached USD->CNY rate from a BUFF user info payload."""
+        rate = user_info.get("buff_price_currency_rate_base_usd")
+        if not rate:
+            return
         try:
-            response = requests.get("https://api.frankfurter.dev/v1/latest?base=USD", timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                cny_rate = data.get("rates", {}).get("CNY")
-                if cny_rate:
-                    with self.exchange_rate_lock:
-                        old_rate = self.usd_to_cny_rate
-                        self.usd_to_cny_rate = float(cny_rate)
-                        if old_rate != self.usd_to_cny_rate:
-                            logger.info(f"Updated USD to CNY exchange rate: {self.usd_to_cny_rate}")
-                    return True
-        except Exception as e:
-            logger.warning(f"Failed to fetch exchange rate: {str(e)}. Using cached rate: {self.usd_to_cny_rate}")
-        return False
-    
-    def _exchange_rate_worker(self):
-        """Background worker to fetch exchange rate every hour"""
-        self.fetch_exchange_rate()
-        self.exchange_rate_fetched = True
-        
+            rate = float(rate)
+        except (TypeError, ValueError):
+            return
+        with self.exchange_rate_lock:
+            old_rate = self.usd_to_cny_rate
+            self.usd_to_cny_rate = rate
+            if old_rate != self.usd_to_cny_rate:
+                logger.info(f"Updated USD to CNY exchange rate from BUFF: {self.usd_to_cny_rate}")
+
+    def _report_balance(self, user_info):
+        """Report the account balance (cash + pending divide, converted to USD) to the master panel."""
+        if not self.api_url or not self.api_key:
+            return
+        account_id = user_info.get("id")
+        if not account_id:
+            logger.warning("No BUFF account id in user info; skipping balance report")
+            return
+        balance = self.buff_account.get_balance()
+        with self.exchange_rate_lock:
+            rate = self.usd_to_cny_rate
+        if not rate:
+            return
+        total_cny = balance["cash_amount"] + balance["pending_divide_amount"]
+        balance_usd = round(total_cny / rate, 2)
+        label = self.balance_label or user_info.get("nickname", "")
+        payload = {"accountId": account_id, "balanceUsd": balance_usd, "label": label}
+        if self._post_to_master_panel("/balances", payload, "balance"):
+            logger.info(f"Reported balance to master panel: {balance_usd} USD (account {account_id})")
+
+    def _balance_report_worker(self, initial_user_info=None):
+        """Background worker: report the balance immediately (first iteration on
+        startup), then refresh and report every hour. Each iteration uses a
+        single get_user_info() call to drive both the rate update and the balance
+        report (userid + label); the first iteration reuses the user_info already
+        fetched at startup so get_user_info is never called twice in a row."""
+        user_info = initial_user_info
         while True:
+            try:
+                if user_info is None:
+                    user_info = self.buff_account.get_user_info()
+                if user_info:
+                    self._apply_rate_from_user_info(user_info)
+                    self._report_balance(user_info)
+            except Exception as e:
+                logger.warning(f"Balance/rate refresh failed: {str(e)}. Using cached rate: {self.usd_to_cny_rate}")
+            user_info = None  # subsequent iterations fetch fresh user_info + balance
             time.sleep(3600)
-            self.fetch_exchange_rate()
     
     def round_price(self, price):
         """Round price to 2 decimals: round up if third decimal >= 0.005, down if < 0.005"""
@@ -145,18 +170,37 @@ class BuffAutoAcceptOffer:
         multiplier = 10 ** decimals
         return int(float(value) * multiplier) / multiplier
     
+    def _post_to_master_panel(self, path, payload, description="data") -> bool:
+        """POST a JSON payload to the master panel. Returns True on success.
+        Single source for the URL, auth header, timeout and error handling shared
+        by item and balance reporting."""
+        if not self.api_url or not self.api_key:
+            return False
+        try:
+            response = requests.post(
+                f"{self.api_url}{path}",
+                json=payload,
+                headers={"Content-Type": "application/json", "X-API-Key": self.api_key},
+                timeout=10,
+            )
+            if response.status_code in (200, 201):
+                return True
+            logger.warning(f"Failed to post {description} to master panel. Status: {response.status_code}, Response: {response.text}")
+            return False
+        except Exception as e:
+            logger.error(f"Error posting {description} to master panel: {str(e)}", exc_info=True)
+            return False
+
     def post_to_master_panel(self, float_value, platform_price, actual_price, market_hash_name):
         """POST item data to master panel API"""
         if not self.api_url or not self.api_key:
             return False
-        
         try:
             truncated_float = self.truncate_float(float_value, 16)
             # Ensure float is sent as a string by using format to prevent JSON auto-conversion
             float_str = f"{truncated_float:.16f}".rstrip('0').rstrip('.')
             if not float_str or float_str == '.':
                 float_str = "0"
-            
             item_data = {
                 "float": float_str,
                 "platformPrice": platform_price,
@@ -164,29 +208,10 @@ class BuffAutoAcceptOffer:
                 "marketHashName": market_hash_name,
                 "type": "sell"
             }
-            
-            response = requests.post(
-                f"{self.api_url}/items",
-                json=item_data,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-API-Key": self.api_key
-                },
-                timeout=10
-            )
-            
-            if response.status_code in [200, 201]:
-                return True
-            else:
-                try:
-                    response_text = response.text
-                    logger.warning(f"Failed to post item to master panel. Status: {response.status_code}, Response: {response_text}")
-                except Exception:
-                    logger.warning(f"Failed to post item to master panel. Status: {response.status_code}")
-                return False
         except Exception as e:
-            logger.error(f"Error posting to master panel: {str(e)}", exc_info=True)
+            logger.error(f"Error preparing item for master panel: {str(e)}", exc_info=True)
             return False
+        return self._post_to_master_panel("/items", item_data, "item")
 
     def exec(self):
         logger.info("BUFF auto-accept offer plugin started. Please wait...")
@@ -200,6 +225,7 @@ class BuffAutoAcceptOffer:
         try:
             user_info = self.buff_account.get_user_info()
             steamid_buff = user_info['steamid']
+            self._apply_rate_from_user_info(user_info)
             logger.info('Sleeping 5s to avoid hitting APIs too frequently...')
             time.sleep(5)
             steam_info = self.buff_account.get_steam_info()
@@ -235,6 +261,15 @@ class BuffAutoAcceptOffer:
             self.require_buyer_send_offer()
         else:
             logger.info('"Buyer must initiate offer" is already enabled')
+
+        if self.api_url and self.api_key:
+            logger.info("Reporting initial balance to master panel and starting hourly updates...")
+            # Pass the startup user_info so the worker's first iteration reuses it
+            # instead of calling get_user_info a second time.
+            self.balance_report_thread = threading.Thread(
+                target=self._balance_report_worker, args=(user_info,), daemon=True
+            )
+            self.balance_report_thread.start()
 
         ignored_offer = {}
         retry_counts = {}   # offer_id -> number of processing attempts so far
