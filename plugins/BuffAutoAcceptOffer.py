@@ -5,6 +5,7 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from BuffApi import BuffAccount
+from utils.BuffApiCrypt import BuffApiCrypt
 from utils.buff_helper import get_valid_session_for_buff
 from utils.logger import PluginLogger, handle_caught_exception
 from utils.steam_client import accept_trade_offer
@@ -21,7 +22,10 @@ class BuffAutoAcceptOffer:
         self.SUPPORT_GAME_TYPES = [{"game": "csgo", "app_id": 730}]
         self.config = config
         self.order_info = {}
-        
+        # bill_ids already reported to the master panel after a seller-send delivery,
+        # so retries of the confirm step don't double-report.
+        self.seller_send_reported = set()
+
         self.master_panel_config = self.config.get("master_panel", {})
         self.api_url = self.master_panel_config.get("baseurl", "")
         self.api_key = self.master_panel_config.get("api_key", "")
@@ -185,7 +189,10 @@ class BuffAutoAcceptOffer:
             )
             if response.status_code in (200, 201):
                 return True
-            logger.warning(f"Failed to post {description} to master panel. Status: {response.status_code}, Response: {response.text}")
+            # Servers that are down/misconfigured (e.g. 404) can return huge HTML
+            # error pages; truncate so a single failure doesn't flood the log.
+            body = (response.text or "")[:300]
+            logger.warning(f"Failed to post {description} to master panel. Status: {response.status_code}, Response: {body}")
             return False
         except Exception as e:
             logger.error(f"Error posting {description} to master panel: {str(e)}", exc_info=True)
@@ -212,6 +219,115 @@ class BuffAutoAcceptOffer:
             logger.error(f"Error preparing item for master panel: {str(e)}", exc_info=True)
             return False
         return self._post_to_master_panel("/items", item_data, "item")
+
+    def _encrypted_steam_cookies(self, client) -> str:
+        """Encrypt a Steam client's steamcommunity.com cookies for BUFF seller_send_offer.
+        Format matches BuffAutoOnSale: 'key=value; key=value; '."""
+        cookies_dict = client._session.cookies.get_dict("steamcommunity.com")
+        cookie_str = "".join(f"{k}={v}; " for k, v in cookies_dict.items())
+        return BuffApiCrypt().encrypt(cookie_str)
+
+    def _wait_for_tradeofferid(self, bill_id, attempts=6, delay=5):
+        """After a seller_send_offer call, poll BUFF until it populates the
+        tradeofferid for the newly-created outgoing offer (or give up)."""
+        for i in range(attempts):
+            time.sleep(delay)
+            try:
+                info = self.buff_account.get_bill_order_info([bill_id])
+            except Exception as e:
+                logger.debug(f"bill_order info poll failed for {bill_id}: {str(e)}")
+                continue
+            items = info.get("items", []) if info else []
+            if items and items[0].get("tradeofferid"):
+                return items[0]["tradeofferid"]
+            logger.info(f"Waiting for BUFF to create the Steam offer for {bill_id} ({i + 1}/{attempts})...")
+        return None
+
+    def _report_seller_send_item(self, item, market_hash_name):
+        """Report a seller-send delivered item to the master panel (price + float),
+        deduped per bill order. The to_deliver payload already carries both."""
+        if not (self.api_url and self.api_key):
+            return
+        bill_id = item.get("id")
+        if bill_id in self.seller_send_reported:
+            return
+        cny_price = item.get("price")
+        float_value = item.get("asset_info", {}).get("paintwear")
+        if not (cny_price and float_value):
+            logger.warning(f"Order {bill_id}: missing price/float; not reported to master panel")
+            return
+        try:
+            platform_price, actual_price = self.calculate_prices(cny_price)
+            if self.post_to_master_panel(float_value, platform_price, actual_price, market_hash_name):
+                self.seller_send_reported.add(bill_id)
+                logger.info(f"Reported seller-send item {market_hash_name} (order {bill_id}) to master panel")
+        except Exception as e:
+            logger.warning(f"Failed to report seller-send item {market_hash_name} to master panel: {str(e)}")
+
+    def _handle_seller_send_order(self, item, market_hash_name, multi_account_manager):
+        """Deliver an order that requires the SELLER to send the Steam offer
+        (is_seller_asked_to_send_offer=True), which the buyer-initiated accept
+        path can never satisfy. Two phases, naturally retried across cycles:
+
+          1. tradeofferid not set yet -> upload the seller's encrypted Steam cookies
+             via seller_send_offer so BUFF creates the outgoing offer, then poll for
+             the id.
+          2. tradeofferid present (BUFF created the offer) -> mobile-confirm it.
+        """
+        bill_id = item.get("id")
+        seller_steamid = str(item.get("seller_steamid", ""))
+        offer_id = item.get("tradeofferid")
+
+        # Surface BUFF-side blockers instead of silently looping forever.
+        fail_confirm = item.get("fail_confirm")
+        if fail_confirm and fail_confirm.get("message"):
+            logger.error(f"Order {bill_id} blocked by BUFF: {fail_confirm.get('message')}")
+            return
+        if item.get("seller_cookie_invalid"):
+            logger.warning(f"Order {bill_id}: BUFF reports seller Steam cookies invalid; re-uploading via seller_send_offer.")
+
+        if not seller_steamid:
+            logger.warning(f"Seller-send order {bill_id} has no seller_steamid; skipping")
+            return
+
+        target_client = multi_account_manager.get_client_for_steamid(seller_steamid)
+        if not target_client:
+            logger.warning(f"No Steam client for seller_steamid {seller_steamid} (order {bill_id}); skipping")
+            return
+
+        # Phase 1: have BUFF send the offer if it hasn't been created yet.
+        if not offer_id:
+            logger.info(f"Seller-send order {bill_id}: uploading Steam session and asking BUFF to send the offer...")
+            try:
+                encrypted = self._encrypted_steam_cookies(target_client)
+            except Exception as e:
+                logger.error(f"Failed to read/encrypt Steam cookies for {seller_steamid} (order {bill_id}): {str(e)}", exc_info=True)
+                return
+            try:
+                resp = self.buff_account.seller_send_offer(seller_steamid, encrypted, [bill_id])
+            except Exception as e:
+                logger.error(f"seller_send_offer request failed for {bill_id}: {str(e)}", exc_info=True)
+                return
+            if resp.get("code") != "OK":
+                logger.error(f"BUFF rejected seller_send_offer for {bill_id}: {resp}")
+                return
+            logger.info(f"BUFF accepted seller_send_offer for {bill_id}; waiting for offer creation...")
+            offer_id = self._wait_for_tradeofferid(bill_id)
+            if not offer_id:
+                logger.info(f"Offer not created yet for {bill_id}; will confirm on a later cycle.")
+                return
+
+        # Phase 2: mobile-confirm the outgoing offer (Steam Guard).
+        logger.info(f"Seller-send order {bill_id}: confirming Steam offer {offer_id} via Steam Guard...")
+        try:
+            with self.steam_client_mutex:
+                target_client._confirm_transaction(str(offer_id))
+            logger.info(f"Confirmed seller-send offer {offer_id} (order {bill_id}); delivery complete.")
+        except Exception as e:
+            logger.error(f"Failed to confirm seller-send offer {offer_id} (order {bill_id}): {str(e)}", exc_info=True)
+            return
+
+        self._report_seller_send_item(item, market_hash_name)
 
     def exec(self):
         logger.info("BUFF auto-accept offer plugin started. Please wait...")
@@ -347,14 +463,29 @@ class BuffAutoAcceptOffer:
                         response_data = self.buff_account.get_sell_order_to_deliver(game["game"], game["app_id"])
                         if response_data and "items" in response_data:
                             trade_supply = response_data["items"]
+                            goods_infos = response_data.get("goods_infos", {})
                             for trade_offer in trade_supply:
+                                # Seller-send orders: BUFF expects US to send the Steam offer
+                                # (the buyer never initiates one), so the accept path below can
+                                # never deliver them. Handle send+confirm in a dedicated pass.
+                                if trade_offer.get("is_seller_asked_to_send_offer"):
+                                    goods_info = goods_infos.get(str(trade_offer.get("goods_id")), {})
+                                    mhn = goods_info.get("market_hash_name") or goods_info.get("name", "Unknown")
+                                    try:
+                                        self._handle_seller_send_order(trade_offer, mhn, multi_account_manager)
+                                    except Exception as e:
+                                        handle_caught_exception(e, "BuffAutoAcceptOffer")
+                                        logger.error(f"Error handling seller-send order {trade_offer.get('id')}: {str(e)}")
+                                    continue
                                 if trade_offer["tradeofferid"] is not None and trade_offer["tradeofferid"] != "":
                                     self.order_info[trade_offer["tradeofferid"]] = trade_offer
                                     if not any(trade_offer["tradeofferid"] == trade["tradeofferid"] for trade in trades):
-                                        user_steamid = str(trade_offer.get('user_steamid', ''))
-                                        
+                                        # Current BUFF API returns seller_steamid on to_deliver items;
+                                        # fall back to it when the legacy user_steamid is absent.
+                                        user_steamid = str(trade_offer.get('user_steamid', '') or trade_offer.get('seller_steamid', ''))
+
                                         if not user_steamid:
-                                            logger.warning(f"No user_steamid found in offer {trade_offer['tradeofferid']}")
+                                            logger.warning(f"No user_steamid/seller_steamid found in offer {trade_offer['tradeofferid']}")
                                             continue
                                             
                                         target_client = multi_account_manager.get_client_for_steamid(user_steamid)
@@ -523,9 +654,9 @@ class BuffAutoAcceptOffer:
 
                                     desc = self.format_item_info(trade)
 
-                                    user_steamid = trade.get('user_steamid', '')
+                                    user_steamid = trade.get('user_steamid', '') or trade.get('seller_steamid', '')
                                     if not user_steamid:
-                                        logger.error(f"No user_steamid found for offer {offer_id}")
+                                        logger.error(f"No user_steamid/seller_steamid found for offer {offer_id}")
                                         continue
 
                                     target_client = multi_account_manager.get_client_for_steamid(user_steamid)

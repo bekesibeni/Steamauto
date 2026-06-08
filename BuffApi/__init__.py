@@ -202,6 +202,53 @@ class BuffAccount:
                 return {"code": "OK", "data": response.text}
         return {}
 
+    def seller_send_offer(self, steamid, encrypted_seller_info: str, bill_orders, last_login_time=None) -> Dict:
+        """Ask BUFF to create and send the Steam trade offer on the seller's behalf.
+
+        Used for orders where ``is_seller_asked_to_send_offer`` is true (the buyer
+        will not initiate the offer). ``encrypted_seller_info`` must be the seller's
+        steamcommunity.com cookie string encrypted with BuffApiCrypt; BUFF decrypts
+        it server-side and uses that session to send the offer. Uploading fresh
+        cookies here also clears a ``seller_cookie_invalid`` state on the order.
+
+        On success BUFF populates the order's ``tradeofferid`` (read it back via
+        get_bill_order_info / get_sell_order_to_deliver); the seller must then
+        mobile-confirm the now-outgoing offer.
+        """
+        if not isinstance(bill_orders, (list, tuple)):
+            bill_orders = [bill_orders]
+        payload = {
+            "steamid": str(steamid),
+            "seller_info": encrypted_seller_info,
+            "bill_orders": list(bill_orders),
+        }
+        if last_login_time is not None:
+            payload["last_login_time"] = last_login_time
+        response = self.post(
+            f"{self.BASE_URL}/api/market/manual_plus/seller_send_offer",
+            json=payload,
+            headers=self.CSRF_Fucker(),
+        )
+        try:
+            return response.json()
+        except ValueError:
+            return {}
+
+    def get_bill_order_info(self, bill_orders) -> Dict:
+        """Get bill order info; used to read back the tradeofferid BUFF created
+        after a seller_send_offer call."""
+        if isinstance(bill_orders, (list, tuple)):
+            bill_orders = ",".join(bill_orders)
+        response = self.get(
+            f"{self.BASE_URL}/api/market/bill_order/batch/info",
+            params={"bill_orders": bill_orders},
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("code") == "OK" and "data" in data:
+                return data["data"]
+        return {}
+
     def get_sell_order_history(self, appid: Union[str, int]) -> List:
         """Get sales history records"""
         params = {
