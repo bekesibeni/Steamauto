@@ -220,13 +220,6 @@ class BuffAutoAcceptOffer:
             return False
         return self._post_to_master_panel("/items", item_data, "item")
 
-    def _encrypted_steam_cookies(self, client) -> str:
-        """Encrypt a Steam client's steamcommunity.com cookies for BUFF seller_send_offer.
-        Format matches BuffAutoOnSale: 'key=value; key=value; '."""
-        cookies_dict = client._session.cookies.get_dict("steamcommunity.com")
-        cookie_str = "".join(f"{k}={v}; " for k, v in cookies_dict.items())
-        return BuffApiCrypt().encrypt(cookie_str)
-
     def _wait_for_tradeofferid(self, bill_id, attempts=6, delay=5):
         """After a seller_send_offer call, poll BUFF until it populates the
         tradeofferid for the newly-created outgoing offer (or give up)."""
@@ -278,11 +271,14 @@ class BuffAutoAcceptOffer:
         seller_steamid = str(item.get("seller_steamid", ""))
         offer_id = item.get("tradeofferid")
 
-        # Surface BUFF-side blockers instead of silently looping forever.
+        # fail_confirm records the LAST failed delivery attempt, not the current
+        # state — re-uploading fresh cookies often clears it (we've seen the exact
+        # "$5 trade limit" message disappear after a successful resend). So log it
+        # for visibility but PROCEED; if delivery genuinely can't happen, the
+        # seller_send_offer / poll / confirm steps below will fail and report it.
         fail_confirm = item.get("fail_confirm")
         if fail_confirm and fail_confirm.get("message"):
-            logger.error(f"Order {bill_id} blocked by BUFF: {fail_confirm.get('message')}")
-            return
+            logger.warning(f"Order {bill_id}: BUFF shows a prior delivery failure ({fail_confirm.get('message')}); retrying anyway.")
         if item.get("seller_cookie_invalid"):
             logger.warning(f"Order {bill_id}: BUFF reports seller Steam cookies invalid; re-uploading via seller_send_offer.")
 
@@ -299,11 +295,23 @@ class BuffAutoAcceptOffer:
         if not offer_id:
             logger.info(f"Seller-send order {bill_id}: uploading Steam session and asking BUFF to send the offer...")
             try:
-                encrypted = self._encrypted_steam_cookies(target_client)
+                cookies_dict = target_client._session.cookies.get_dict("steamcommunity.com")
             except Exception as e:
-                logger.error(f"Failed to read/encrypt Steam cookies for {seller_steamid} (order {bill_id}): {str(e)}", exc_info=True)
+                logger.error(f"Failed to read Steam cookies for {seller_steamid} (order {bill_id}): {str(e)}", exc_info=True)
                 return
+            # Diagnostic: BUFF can only send the offer if the uploaded web session
+            # carries steamLoginSecure. Missing it -> the bot's web login for this
+            # account is incomplete and BUFF will silently fail to send.
+            cookie_names = sorted(cookies_dict.keys())
+            if "steamLoginSecure" not in cookies_dict:
+                logger.warning(
+                    f"Order {bill_id}: Steam web session for {seller_steamid} has NO steamLoginSecure cookie "
+                    f"(have: {cookie_names}). BUFF cannot send with this; the account needs a fresh web login."
+                )
+            else:
+                logger.info(f"Order {bill_id}: uploading {len(cookie_names)} Steam cookie(s) for {seller_steamid}: {cookie_names}")
             try:
+                encrypted = BuffApiCrypt().encrypt("".join(f"{k}={v}; " for k, v in cookies_dict.items()))
                 resp = self.buff_account.seller_send_offer(seller_steamid, encrypted, [bill_id])
             except Exception as e:
                 logger.error(f"seller_send_offer request failed for {bill_id}: {str(e)}", exc_info=True)
@@ -311,10 +319,14 @@ class BuffAutoAcceptOffer:
             if resp.get("code") != "OK":
                 logger.error(f"BUFF rejected seller_send_offer for {bill_id}: {resp}")
                 return
-            logger.info(f"BUFF accepted seller_send_offer for {bill_id}; waiting for offer creation...")
+            logger.info(f"BUFF accepted seller_send_offer for {bill_id} (resp: {resp}); waiting for offer creation...")
             offer_id = self._wait_for_tradeofferid(bill_id)
             if not offer_id:
-                logger.info(f"Offer not created yet for {bill_id}; will confirm on a later cycle.")
+                logger.warning(
+                    f"BUFF did not create the Steam offer for {bill_id} within the poll window. Most likely BUFF "
+                    f"couldn't send with the uploaded session (seller_cookie_invalid) or the account is genuinely "
+                    f"trade-restricted. Will retry next cycle."
+                )
                 return
 
         # Phase 2: mobile-confirm the outgoing offer (Steam Guard).
