@@ -173,6 +173,9 @@ class MultiAccountManager:
                     pass
         
         account = self.account_by_steamid.get(steamid_str)
+        if account and not account.get("enabled", True):
+            logger.info(f"Skipping disabled account: {account.get('name', steamid_str)} (SteamID: {steamid_str}); not logging in")
+            return None
         if account:
             stored_client = None
             for stored_steamid, client in self.steam_clients.items():

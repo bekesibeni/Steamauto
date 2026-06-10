@@ -227,7 +227,7 @@ class BuffProfitReport:
                         self.steam_client._session.cookies.clear()
                         self.steam_client.login(
                             self.steam_client.username, self.steam_client._password,
-                            json5.dumps(self.steam_client.steam_guard)
+                            self.steam_client.steam_guard
                         )
                         self.logger.info("[BuffProfitReport] Steam session refreshed")
                         steam_session_path = os.path.join(SESSION_FOLDER, self.steam_client.username.lower() + ".pkl")
