@@ -1,9 +1,7 @@
-import re
 import threading
 import time
 
 import requests
-from bs4 import BeautifulSoup
 from BuffApi import BuffAccount
 from utils.BuffApiCrypt import BuffApiCrypt
 from utils.buff_helper import get_valid_session_for_buff
@@ -471,12 +469,27 @@ class BuffAutoAcceptOffer:
                         time.sleep(5)
                         continue
 
+                    # The to_deliver JSON already carries the float (asset_info.paintwear),
+                    # price and bill id for each pending item, keyed by assetid. Build the
+                    # float map straight from it so delivery does not depend on scraping the
+                    # to_deliver HTML page (which breaks whenever BUFF changes its markup).
+                    float_map = {}
                     for index, game in enumerate(self.SUPPORT_GAME_TYPES):
                         response_data = self.buff_account.get_sell_order_to_deliver(game["game"], game["app_id"])
                         if response_data and "items" in response_data:
                             trade_supply = response_data["items"]
                             goods_infos = response_data.get("goods_infos", {})
                             for trade_offer in trade_supply:
+                                asset_info = trade_offer.get("asset_info") or {}
+                                ai_assetid = str(asset_info.get("assetid") or "")
+                                ai_float = asset_info.get("paintwear")
+                                if ai_assetid and ai_float:
+                                    goods_info = goods_infos.get(str(trade_offer.get("goods_id")), {})
+                                    float_map[ai_assetid] = {
+                                        "float": ai_float,
+                                        "cny_price": trade_offer.get("price"),
+                                        "market_hash_name": goods_info.get("market_hash_name") or goods_info.get("name"),
+                                    }
                                 # Seller-send orders: BUFF expects US to send the Steam offer
                                 # (the buyer never initiates one), so the accept path below can
                                 # never deliver them. Handle send+confirm in a dedicated pass.
@@ -529,56 +542,6 @@ class BuffAutoAcceptOffer:
                     trades = unique_trades
                     unprocessed_count = len(trades)
                     logger.info(f"Found {unprocessed_count} unique BUFF offer(s) to process")
-                    
-                    float_map = {}
-                    if len(trades) > 0:
-                        try:
-                            game_type = trades[0].get("game", "csgo")
-                            
-                            html_page = self.buff_account.get_sell_order_to_deliver_page(game_type)
-                            if html_page:
-                                order_ids_match = re.search(r'sellingToDeliver\(\[(.*?)\],\s*\d+\)', html_page, re.DOTALL)
-                                if order_ids_match:
-                                    order_ids_str = order_ids_match.group(1)
-                                    order_ids = re.findall(r'"([^"]+)"', order_ids_str)
-                                    
-                                    if order_ids:
-                                        batch_data = self.buff_account.get_sell_order_to_deliver_batch(game_type, order_ids)
-                                        if batch_data.get("code") == "OK" and "data" in batch_data:
-                                            html_content = batch_data["data"]
-                                            soup = BeautifulSoup(html_content, "html.parser")
-                                            order_rows = soup.find_all("tr", class_="deliver-order")
-                                            
-                                            for row in order_rows:
-                                                item_div = row.find("div", class_="item-detail-img")
-                                                if item_div:
-                                                    assetid = item_div.get("data-assetid")
-                                                    if assetid:
-                                                        float_p = row.find("p", string=re.compile(r"Float:"))
-                                                        float_value = None
-                                                        if float_p:
-                                                            float_text = float_p.get_text()
-                                                            float_match = re.search(r"Float:\s*([\d.]+)", float_text)
-                                                            if float_match:
-                                                                float_value = float_match.group(1)
-                                                        
-                                                        price_span = row.find("span", class_="custom-currency")
-                                                        cny_price = None
-                                                        if price_span:
-                                                            cny_price = price_span.get("data-price")
-                                                        
-                                                        # Try to get item name from the row
-                                                        item_name_tag = row.find("a", class_="item-detail-name") or row.find("div", class_="item-detail-name")
-                                                        row_item_name = item_name_tag.get_text(strip=True) if item_name_tag else None
-
-                                                        if assetid and float_value and cny_price:
-                                                            float_map[assetid] = {
-                                                                "float": float_value,
-                                                                "cny_price": cny_price,
-                                                                "market_hash_name": row_item_name
-                                                            }
-                        except Exception as e:
-                            logger.error(f"[BuffAutoAcceptOffer] Failed to fetch float values: {str(e)}", exc_info=True)
 
                     try:
                         if len(trades) != 0:

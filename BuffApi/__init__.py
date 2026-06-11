@@ -154,54 +154,6 @@ class BuffAccount:
                 return data["data"]
         return {}
 
-    def get_sell_order_to_deliver_page(self, game: str) -> str:
-        """Get the to_deliver page HTML to extract order IDs"""
-        # Build cookie string from session cookies
-        cookie_parts = []
-        for cookie in self.session.cookies:
-            cookie_parts.append(f"{cookie.name}={cookie.value}")
-        cookie_string = "; ".join(cookie_parts)
-        
-        headers = {
-            "cookie": cookie_string
-        }
-        
-        url = f"{self.BASE_URL}/market/sell_order/to_deliver?game={game}"
-        response = self.session.get(url, headers=headers)
-        if response.status_code == 200:
-            return response.text
-        return ""
-
-    def get_sell_order_to_deliver_batch(self, game: str, bill_orders: List[str]) -> Dict:
-        """Get batch orders waiting for delivery with HTML data"""
-        params = {
-            "game": game,
-            "bill_orders": ",".join(bill_orders)
-        }
-        # Build cookie string from session cookies (like Node.js does)
-        cookie_parts = []
-        for cookie in self.session.cookies:
-            cookie_parts.append(f"{cookie.name}={cookie.value}")
-        cookie_string = "; ".join(cookie_parts)
-        
-        # Only cookie header needed, just like Node.js
-        headers = {
-            "cookie": cookie_string
-        }
-        
-        # Use session.get directly to avoid JSON parsing in debug log
-        url = f"{self.BASE_URL}/market/sell_order/to_deliver/batch"
-        response = self.session.get(url, params=params, headers=headers)
-        if response.status_code == 200:
-            try:
-                data = response.json()
-                if data.get("code") == "OK" and "data" in data:
-                    return data
-            except Exception:
-                # If JSON parsing fails, return raw text
-                return {"code": "OK", "data": response.text}
-        return {}
-
     def seller_send_offer(self, steamid, encrypted_seller_info: str, bill_orders, last_login_time=None) -> Dict:
         """Ask BUFF to create and send the Steam trade offer on the seller's behalf.
 
