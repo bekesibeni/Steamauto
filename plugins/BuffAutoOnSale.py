@@ -145,6 +145,30 @@ class BuffAutoOnSale:
             "Referer": "https://buff.163.com/market/sell_order/create?game=csgo",
         }
 
+    def _get_json(self, url, headers=None, params=None, retries=3, backoff=5):
+        """GET a BUFF endpoint and return parsed JSON, retrying on transient
+        network errors.
+
+        The urllib3 Retry adapter only covers connect/header failures; a timeout
+        while streaming the response body (inside .json() -> .content) escapes it
+        and surfaces as a ConnectionError, which would otherwise abort the whole
+        run. This wrapper retries those too. Safe to retry because GETs here are
+        read-only (no listing/write side effects)."""
+        if headers is None:
+            headers = self.buff_headers
+        last_exc = None
+        for attempt in range(1, retries + 1):
+            try:
+                return self.session.get(url, headers=headers, params=params).json()
+            except requests.exceptions.RequestException as e:
+                last_exc = e
+                self.logger.warning(
+                    "[BuffAutoOnSale] Network error on GET " + url.split("?")[0] +
+                    " (attempt " + str(attempt) + "/" + str(retries) + "): " + str(e))
+                if attempt < retries:
+                    time.sleep(backoff)
+        raise last_exc
+
     def _build_sell_order_url(self, goods_id, game, app_id, min_paint_wear=0, max_paint_wear=1.0):
         """Build a BUFF sell order listing URL, omitting paint wear params when using full range."""
         base = ("https://buff.163.com/api/market/goods/sell_order?goods_id=" + str(goods_id)
@@ -161,8 +185,7 @@ class BuffAutoOnSale:
         return False
 
     def check_buff_account_state(self):
-        response_json = self.session.get("https://buff.163.com/account/api/user/info",
-                                         headers=self.buff_headers).json()
+        response_json = self._get_json("https://buff.163.com/account/api/user/info")
         if response_json["code"] == "OK":
             if "data" in response_json:
                 if "nickname" in response_json["data"]:
@@ -186,7 +209,7 @@ class BuffAutoOnSale:
             "steamid": str(self._current_steamid)
         }
         self.logger.info("[BuffAutoOnSale] Fetching inventory | game=" + str(game) + " appid=" + str(app_id) + " steamid=" + str(self._current_steamid))
-        response_json = self.session.get(url, headers=self.buff_headers, params=params).json()
+        response_json = self._get_json(url, params=params)
         if response_json["code"] == "OK":
             return response_json["data"]
         else:
@@ -535,7 +558,7 @@ class BuffAutoOnSale:
         self.logger.info("[BuffAutoOnSale] Sleeping " + str(sleep_seconds_to_prevent_buff_ban) + "s to avoid IP ban")
         time.sleep(sleep_seconds_to_prevent_buff_ban)
         self.logger.info("[BuffAutoOnSale] Fetching highest BUFF buy order")
-        response = self.session.get(url, headers=self.buff_headers).json()
+        response = self._get_json(url)
         if response["code"] != "OK":
             return {}
         buy_orders = merge_buy_orders(response["data"])
@@ -590,7 +613,7 @@ class BuffAutoOnSale:
         self.logger.info("[BuffAutoOnSale] Sleeping " + str(sleep_seconds_to_prevent_buff_ban) + "s to avoid IP ban")
         time.sleep(sleep_seconds_to_prevent_buff_ban)
         url = self._build_sell_order_url(goods_id, game, app_id, min_paint_wear, max_paint_wear)
-        response_json = self.session.get(url, headers=self.buff_headers).json()
+        response_json = self._get_json(url)
         if response_json["code"] == "OK":
             if len(response_json["data"]["items"]) == 0:  # No listings
                 self.logger.info("[BuffAutoOnSale] No listings found in this range. Skipping item.")
@@ -646,7 +669,7 @@ class BuffAutoOnSale:
         self.logger.info("[BuffAutoOnSale] Sleeping " + str(sleep_seconds_to_prevent_buff_ban) + "s to avoid IP ban")
         time.sleep(sleep_seconds_to_prevent_buff_ban)
         url = self._build_sell_order_url(goods_id, game, app_id, min_paint_wear, max_paint_wear)
-        resp = self.session.get(url, headers=self.buff_headers).json()
+        resp = self._get_json(url)
         if resp.get("code") != "OK" or "data" not in resp or "items" not in resp["data"] or len(resp["data"]["items"]) == 0:
             self.logger.info("[BuffAutoOnSale] Depth fetch failed, fallback to lowest price")
             return self.get_lowest_sell_price(goods_id, game, app_id, min_paint_wear, max_paint_wear)
@@ -726,11 +749,26 @@ class BuffAutoOnSale:
         total_items = 0
         for game in SUPPORT_GAME_TYPES:
             self.logger.info("[BuffAutoOnSale] Checking " + game["game"] + " inventory" + account_label + "...")
-            inventory_json = self.get_buff_inventory(
-                state="cansell", sort_by="price.desc", game=game["game"], app_id=game["app_id"],
-                force=force_refresh
-            )
-            items = inventory_json.get("items", [])
+            # Paginate through all inventory pages (BUFF caps page_size, so a large
+            # inventory spans multiple pages). Only force a refresh on the first page.
+            items = []
+            page_num = 1
+            page_size = 500
+            while True:
+                inventory_json = self.get_buff_inventory(
+                    page_num=page_num, page_size=page_size,
+                    state="cansell", sort_by="price.desc", game=game["game"], app_id=game["app_id"],
+                    force=(force_refresh if page_num == 1 else 0)
+                )
+                page_items = inventory_json.get("items", [])
+                items.extend(page_items)
+                total_page = inventory_json.get("total_page", 1)
+                if not page_items or page_num >= total_page:
+                    break
+                page_num += 1
+                # Wait between page requests to avoid hammering BUFF's API
+                self.logger.info("[BuffAutoOnSale] Waiting 30s before fetching page " + str(page_num) + "...")
+                time.sleep(30)
             total_items += len(items)
             if len(items) != 0:
                 self.logger.info(
@@ -964,7 +1002,7 @@ class BuffAutoOnSale:
                 else:
                     url = 'https://buff.163.com/api/market/bill_order/batch/info?bill_orders=' + order_id
                     headers = self._get_csrf_headers()
-                    res_json = self.session.get(url, headers=headers).json()
+                    res_json = self._get_json(url, headers=headers)
                     if res_json["code"] == "OK" and len(res_json["data"]["items"]) > 0 and \
                             res_json["data"]["items"][0]["tradeofferid"] is not None:
                         steam_trade_offer_id = res_json["data"]["items"][0]["tradeofferid"]
