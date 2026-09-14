@@ -158,13 +158,19 @@ class BuffAutoOnSale:
             headers = self.buff_headers
         last_exc = None
         for attempt in range(1, retries + 1):
+            resp = None
             try:
-                return self.session.get(url, headers=headers, params=params).json()
+                resp = self.session.get(url, headers=headers, params=params)
+                return resp.json()
             except requests.exceptions.RequestException as e:
                 last_exc = e
+                detail = str(e)
+                if resp is not None:
+                    # Non-JSON body (usually rate limiting / anti-bot page) - show what BUFF sent
+                    detail += " | HTTP " + str(resp.status_code) + " body: " + resp.text[:200].replace("\n", " ")
                 self.logger.warning(
-                    "[BuffAutoOnSale] Network error on GET " + url.split("?")[0] +
-                    " (attempt " + str(attempt) + "/" + str(retries) + "): " + str(e))
+                    "[BuffAutoOnSale] Error on GET " + url.split("?")[0] +
+                    " (attempt " + str(attempt) + "/" + str(retries) + "): " + detail)
                 if attempt < retries:
                     time.sleep(backoff)
         raise last_exc
@@ -744,9 +750,10 @@ class BuffAutoOnSale:
         return self.steam_client
 
     def _process_inventory(self, force_refresh, description, use_range_price, custom_floats):
-        """Process inventory for the current account: fetch, de-duplicate, and list items. Returns item count."""
+        """Process inventory for the current account: fetch, de-duplicate, and list items.
+        Returns the number of batches that were actually listed on BUFF (0 = no progress)."""
         account_label = " for account " + str(self._current_steamid)
-        total_items = 0
+        listed_batches = 0
         for game in SUPPORT_GAME_TYPES:
             self.logger.info("[BuffAutoOnSale] Checking " + game["game"] + " inventory" + account_label + "...")
             # Paginate through all inventory pages (BUFF caps page_size, so a large
@@ -769,7 +776,6 @@ class BuffAutoOnSale:
                 # Wait between page requests to avoid hammering BUFF's API
                 self.logger.info("[BuffAutoOnSale] Waiting 30s before fetching page " + str(page_num) + "...")
                 time.sleep(30)
-            total_items += len(items)
             if len(items) != 0:
                 self.logger.info(
                     "[BuffAutoOnSale] Found " + str(len(items)) + " sellable items in " + game["game"] +
@@ -789,16 +795,17 @@ class BuffAutoOnSale:
                 # List in groups of 10
                 items_to_sell_group = [items_to_sell[i:i + 10] for i in range(0, len(items_to_sell), 10)]
                 for batch in items_to_sell_group:
-                    self.put_item_on_sale(items=batch, price=-1, description=description,
-                                          game=game["game"], app_id=game["app_id"],
-                                          use_range_price=use_range_price, custom_floats=custom_floats)
+                    if self.put_item_on_sale(items=batch, price=-1, description=description,
+                                             game=game["game"], app_id=game["app_id"],
+                                             use_range_price=use_range_price, custom_floats=custom_floats):
+                        listed_batches += 1
                     if 'buy_order' in self.config["buff_auto_on_sale"] and \
                             self.config["buff_auto_on_sale"]["buy_order"]["enable"]:
                         self.confirm_supply_order()
-                self.logger.info("[BuffAutoOnSale] BUFF listing succeeded" + account_label + "!")
+                self.logger.info("[BuffAutoOnSale] " + game["game"] + " pass finished" + account_label + ".")
             else:
                 self.logger.info("[BuffAutoOnSale] " + game["game"] + " inventory empty" + account_label + ". Skipping.")
-        return total_items
+        return listed_batches
 
     def exec(self):
         self.logger.info("[BuffAutoOnSale] BUFF auto-listing plugin started. Sleeping 30s to stagger with auto-accept plugin")
@@ -887,11 +894,17 @@ class BuffAutoOnSale:
                     self.logger.info("[BuffAutoOnSale] All accounts processed. Sleeping " + str(sleep_interval) + "s before next cycle.")
                 else:
                     # Single account mode (original logic)
+                    # Re-scan while passes keep listing something. Items that get skipped
+                    # (no float, over max_price, no listings) stay in the inventory forever,
+                    # so looping until the inventory is empty would spin and hammer BUFF.
                     while True:
-                        items_count = self._process_inventory(force_refresh, description, use_range_price, custom_floats)
-                        if items_count == 0:
-                            self.logger.info("[BuffAutoOnSale] Inventory empty. This batch finished.")
+                        listed_batches = self._process_inventory(force_refresh, description, use_range_price, custom_floats)
+                        if listed_batches == 0:
+                            self.logger.info("[BuffAutoOnSale] Nothing new listed. This batch finished.")
                             break
+                        self.logger.info("[BuffAutoOnSale] Sleeping " + str(self.sleep_seconds_to_prevent_buff_ban) +
+                                         "s before re-scanning inventory")
+                        time.sleep(self.sleep_seconds_to_prevent_buff_ban)
             except Exception as e:
                 handle_caught_exception(e, "[BuffAutoOnSale]", known=True)
                 self.logger.error("[BuffAutoOnSale] Listing failed. Error: " + str(e), exc_info=True)
